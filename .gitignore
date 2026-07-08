@@ -9,3 +9,5 @@ build/
 .env
 /data/
 audit/
+AGENTS.md
+PROJECT.md
