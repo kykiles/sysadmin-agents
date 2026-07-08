@@ -144,7 +144,7 @@ async def compose_down(project: str) -> dict:
 
 def build_sysadmin_tools() -> list[Tool]:
     return [
-        Tool("docker_ps", "List all docker containers", ContainerParams, docker_ps, Safety.SAFE),
+        Tool("docker_ps", "List all docker containers. Use this to see what containers are available before inspecting specific ones.", NoParams, docker_ps, Safety.SAFE),
         Tool("docker_logs", "Get container logs", LogsParams, docker_logs, Safety.SAFE),
         Tool("docker_stats", "Get container resource stats", ContainerParams, docker_stats, Safety.SAFE),
         Tool("docker_inspect", "Inspect container details", ContainerParams, docker_inspect, Safety.SAFE),
