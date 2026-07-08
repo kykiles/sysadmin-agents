@@ -22,6 +22,10 @@ class ExecParams(BaseModel):
     command: list[str] = Field(description="command argv to run inside container")
 
 
+class NoParams(BaseModel):
+    pass
+
+
 class ProjectParams(BaseModel):
     project: str = Field(description="compose project dir name under COMPOSE_PROJECTS_DIR")
 
@@ -144,7 +148,7 @@ def build_sysadmin_tools() -> list[Tool]:
         Tool("docker_logs", "Get container logs", LogsParams, docker_logs, Safety.SAFE),
         Tool("docker_stats", "Get container resource stats", ContainerParams, docker_stats, Safety.SAFE),
         Tool("docker_inspect", "Inspect container details", ContainerParams, docker_inspect, Safety.SAFE),
-        Tool("compose_ls", "List docker compose projects under COMPOSE_PROJECTS_DIR", BaseModel, compose_ls, Safety.SAFE),
+        Tool("compose_ls", "List docker compose projects under COMPOSE_PROJECTS_DIR", NoParams, compose_ls, Safety.SAFE),
         Tool("compose_ps", "List services of a compose project", ProjectParams, compose_ps, Safety.SAFE),
         Tool("docker_restart", "Restart a container (DESTRUCTIVE)", ContainerParams, docker_restart, Safety.DANGEROUS),
         Tool("docker_stop", "Stop a container (DESTRUCTIVE)", ContainerParams, docker_stop, Safety.DANGEROUS),
