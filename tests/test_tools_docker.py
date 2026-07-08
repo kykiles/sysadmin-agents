@@ -6,7 +6,7 @@ from app.tools.base import Safety
 
 async def test_docker_ps_safe():
     fake_container = MagicMock()
-    fake_container.attrs = {"Id": "abc", "Names": ["bot"], "State": "running", "Image": "img", "Status": "Up"}
+    fake_container._container = {"Id": "abc", "Names": ["bot"], "State": "running", "Image": "img", "Status": "Up"}
     fake = MagicMock()
     fake.containers = MagicMock()
     fake.containers.list = AsyncMock(return_value=[fake_container])
