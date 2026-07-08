@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
     telegram_user_id: int = Field(alias="TELEGRAM_USER_ID")
+    telegram_chat_id: int = Field(default=0, alias="TELEGRAM_CHAT_ID")
 
     compose_projects_dir: str = Field(default="/opt", alias="COMPOSE_PROJECTS_DIR")
     agent_max_iterations: int = Field(default=10, alias="AGENT_MAX_ITERATIONS")

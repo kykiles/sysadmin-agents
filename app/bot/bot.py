@@ -14,9 +14,10 @@ def create_bot() -> Bot:
 
 def create_dispatcher(*, registry: AgentRegistry) -> Dispatcher:
     dp = Dispatcher()
+    chat_id = settings.telegram_chat_id or settings.telegram_user_id
     dp.include_router(build_router(
         registry=registry,
         allowed_id=settings.telegram_user_id,
-        chat_id=settings.telegram_user_id,
+        chat_id=chat_id,
     ))
     return dp
