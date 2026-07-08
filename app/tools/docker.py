@@ -22,6 +22,10 @@ class ExecParams(BaseModel):
     command: list[str] = Field(description="command argv to run inside container")
 
 
+class ShellParams(BaseModel):
+    command: list[str] = Field(description="command argv to run on host shell")
+
+
 class NoParams(BaseModel):
     pass
 
@@ -93,6 +97,21 @@ async def docker_exec(container: str, command: list[str]) -> dict:
         return {"container": container, "command": command, "output": output, "exit_code": inspect.get("ExitCode")}
 
 
+# ---------- host shell ----------
+
+async def shell_exec(command: list[str]) -> dict:
+    proc = await asyncio.create_subprocess_exec(
+        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return {
+        "command": command,
+        "returncode": proc.returncode,
+        "stdout": stdout.decode(errors="replace"),
+        "stderr": stderr.decode(errors="replace"),
+    }
+
+
 # ---------- compose (subprocess) ----------
 
 def _project_dir(project: str) -> str:
@@ -153,4 +172,5 @@ def build_sysadmin_tools() -> list[Tool]:
         Tool("compose_down", "Run docker compose down for a project (DESTRUCTIVE)", ProjectParams, compose_down, Safety.DANGEROUS),
         Tool("docker_query", "Run a read-only query inside a container (psql, mysql, sqlite3, cat logs, etc.). Safe, auto-executed.", ExecParams, docker_exec, Safety.SAFE),
         Tool("docker_exec", "Run any command inside a container (DESTRUCTIVE — may modify data). Requires user confirmation.", ExecParams, docker_exec, Safety.DANGEROUS),
+        Tool("shell_exec", "Run a shell command on the host system (DESTRUCTIVE). Requires user confirmation.", ShellParams, shell_exec, Safety.DANGEROUS),
     ]
