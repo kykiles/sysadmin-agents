@@ -17,7 +17,7 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, chat_id: int) -> R
     async def _task(message: Message):
         task = Task(content=message.text or "")
         result = await registry.request("director", task)
-        await message.answer(result.content)
+        await message.answer(result.content, parse_mode=None)
 
     @router.callback_query(F.data.startswith("cf:"))
     async def _confirm(callback: CallbackQuery):
@@ -28,7 +28,8 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, chat_id: int) -> R
             gw._resolve(task_id, decision == "yes")
         await callback.answer("Подтверждено" if decision == "yes" else "Отклонено")
         await callback.message.edit_text(
-            callback.message.text + f"\n\n> Решение: {'Approve' if decision == 'yes' else 'Reject'}"
+            callback.message.text + f"\n\n> Решение: {'Approve' if decision == 'yes' else 'Reject'}",
+            parse_mode=None,
         )
 
     return router
