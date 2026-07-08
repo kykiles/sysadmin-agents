@@ -35,7 +35,7 @@ class ProjectParams(BaseModel):
 async def docker_ps() -> dict:
     async with Docker() as docker:
         containers = await docker.containers.list(all=True)
-        return {"containers": [c.attrs for c in containers]}
+        return {"containers": [c._container for c in containers]}
 
 
 async def docker_logs(container: str, tail: int = 200) -> dict:
