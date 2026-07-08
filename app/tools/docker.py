@@ -151,5 +151,6 @@ def build_sysadmin_tools() -> list[Tool]:
         Tool("docker_start", "Start a container (DESTRUCTIVE)", ContainerParams, docker_start, Safety.DANGEROUS),
         Tool("compose_up", "Run docker compose up -d for a project (DESTRUCTIVE)", ProjectParams, compose_up, Safety.DANGEROUS),
         Tool("compose_down", "Run docker compose down for a project (DESTRUCTIVE)", ProjectParams, compose_down, Safety.DANGEROUS),
-        Tool("docker_exec", "Run a command inside a container (DESTRUCTIVE)", ExecParams, docker_exec, Safety.DANGEROUS),
+        Tool("docker_query", "Run a read-only query inside a container (psql, mysql, sqlite3, cat logs, etc.). Safe, auto-executed.", ExecParams, docker_exec, Safety.SAFE),
+        Tool("docker_exec", "Run any command inside a container (DESTRUCTIVE — may modify data). Requires user confirmation.", ExecParams, docker_exec, Safety.DANGEROUS),
     ]
