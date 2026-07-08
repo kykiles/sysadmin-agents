@@ -87,12 +87,8 @@ async def docker_exec(container: str, command: list[str]) -> dict:
         c = docker.containers.container(container)
         exec_obj = await c.exec(cmd=command)
         stream = exec_obj.start(detach=False)
-        output = ""
-        async for chunk in stream:
-            if isinstance(chunk, bytes):
-                output += chunk.decode(errors="replace")
-            else:
-                output += str(chunk)
+        msg = await stream.read_out()
+        output = msg.data.decode(errors="replace") if msg.data else ""
         inspect = await exec_obj.inspect()
         return {"container": container, "command": command, "output": output, "exit_code": inspect.get("ExitCode")}
 
