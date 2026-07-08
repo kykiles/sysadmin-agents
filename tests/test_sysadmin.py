@@ -18,8 +18,7 @@ async def test_sysadmin_has_docker_tools(monkeypatch):
     reg = AgentRegistry()
     agent = ChiefSysadmin(llm=FakeLLM([]), registry=reg)
     names = {t.name for t in agent.tools}
-    assert {"docker_ps", "docker_logs", "docker_restart"} <= names
-    assert "shell_exec" not in names
+    assert {"docker_ps", "docker_logs", "docker_restart", "shell_exec"} <= names
 
 
 async def test_sysadmin_calls_docker_ps(monkeypatch):

@@ -52,7 +52,7 @@ async def test_build_sysadmin_tools_classifications():
     assert by_name["docker_restart"].safety is Safety.DANGEROUS
     assert by_name["compose_up"].safety is Safety.DANGEROUS
     assert by_name["docker_exec"].safety is Safety.DANGEROUS
-    assert "shell_exec" not in by_name
+    assert by_name["shell_exec"].safety is Safety.DANGEROUS
 
 
 async def test_compose_ls(tmp_path, monkeypatch):
