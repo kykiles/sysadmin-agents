@@ -1,0 +1,10 @@
+services:
+  sysadmin-agents:
+    build: .
+    container_name: sysadmin-agents
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./audit:/data
+      - ${COMPOSE_PROJECTS_DIR:-/opt}:/opt:ro
