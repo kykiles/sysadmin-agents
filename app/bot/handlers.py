@@ -14,13 +14,13 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, chat_id: int) -> R
         await message.answer("Система активна. Опишите задачу.")
 
     @router.message(WhitelistFilter(allowed_id))
-    async def _task(message: Message, registry: AgentRegistry):
+    async def _task(message: Message):
         task = Task(content=message.text or "")
         result = await registry.request("director", task)
         await message.answer(result.content)
 
     @router.callback_query(F.data.startswith("cf:"))
-    async def _confirm(callback: CallbackQuery, registry: AgentRegistry):
+    async def _confirm(callback: CallbackQuery):
         _, task_id, decision = callback.data.split(":")
         from app.bot.gateway import TelegramConfirmationGateway
         gw = registry._gateway

@@ -4,6 +4,8 @@ from app.config import Settings
 
 def test_settings_defaults(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
     monkeypatch.setenv("TELEGRAM_USER_ID", "1")
     s = Settings()
