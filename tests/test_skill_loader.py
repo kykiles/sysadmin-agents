@@ -1,6 +1,11 @@
-from app.skills.loader import parse_frontmatter
+from pathlib import Path
+
+from app.skills.loader import parse_frontmatter, Skill, load_skill, load_all_skills
 from app.skills.docker.tools import build_tools as build_docker_tools
 from app.tools.base import Safety
+
+ROOT = Path(__file__).resolve().parents[1]
+SKILLS_DIR = ROOT / "app" / "skills"
 
 
 def test_parse_frontmatter_extracts_meta_and_body():
@@ -25,3 +30,18 @@ def test_docker_skill_tools():
     # docker_query и shell_exec принадлежат другим skill'ам
     assert "docker_query" not in by_name
     assert "shell_exec" not in by_name
+
+
+def test_load_skill_docker():
+    skill = load_skill(SKILLS_DIR / "docker")
+    assert isinstance(skill, Skill)
+    assert skill.name == "docker"
+    assert skill.description
+    assert "управление Docker" in skill.instructions
+    assert "docker_ps" in {t.name for t in skill.tools}
+
+
+def test_load_all_skills_includes_docker():
+    skills = load_all_skills(SKILLS_DIR)
+    assert "docker" in skills
+    assert isinstance(skills["docker"], Skill)
