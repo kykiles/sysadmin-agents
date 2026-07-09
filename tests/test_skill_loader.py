@@ -45,3 +45,14 @@ def test_load_all_skills_includes_docker():
     skills = load_all_skills(SKILLS_DIR)
     assert "docker" in skills
     assert isinstance(skills["docker"], Skill)
+
+
+def test_db_and_host_skills_load():
+    skills = load_all_skills(SKILLS_DIR)
+    assert {"docker", "db", "host"} <= set(skills)
+    db_tools = {t.name for t in skills["db"].tools}
+    host_tools = {t.name: t for t in skills["host"].tools}
+    assert db_tools == {"docker_query"}
+    assert skills["db"].tools[0].safety is Safety.SAFE
+    assert "shell_exec" in host_tools
+    assert host_tools["shell_exec"].safety is Safety.DANGEROUS
