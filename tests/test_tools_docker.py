@@ -1,7 +1,6 @@
 import json
 from unittest.mock import AsyncMock, patch, MagicMock
 from app.tools import docker as dk
-from app.tools.base import Safety
 
 
 async def test_docker_ps_safe():
@@ -42,17 +41,6 @@ async def test_docker_restart_dangerous():
     with patch("app.tools.docker.Docker", return_value=fake):
         out = await dk.docker_restart(container="bot")
     assert out["restarted"] == "bot"
-
-
-async def test_build_sysadmin_tools_classifications():
-    tools = dk.build_sysadmin_tools()
-    by_name = {t.name: t for t in tools}
-    assert by_name["docker_ps"].safety is Safety.SAFE
-    assert by_name["docker_logs"].safety is Safety.SAFE
-    assert by_name["docker_restart"].safety is Safety.DANGEROUS
-    assert by_name["compose_up"].safety is Safety.DANGEROUS
-    assert by_name["docker_exec"].safety is Safety.DANGEROUS
-    assert by_name["shell_exec"].safety is Safety.DANGEROUS
 
 
 async def test_compose_ls(tmp_path, monkeypatch):

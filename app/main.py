@@ -1,10 +1,12 @@
 import asyncio
+from pathlib import Path
 from app.config import settings
 from app.logging import setup_logging, get_logger
 from app.llm.client import LLMClient
 from app.agents.registry import AgentRegistry
 from app.agents.director import Director
-from app.agents.sysadmin import ChiefSysadmin
+from app.agents.loader import load_agents
+from app.skills.loader import load_all_skills
 from app.bot.bot import create_bot, create_dispatcher
 from app.bot.gateway import TelegramConfirmationGateway
 
@@ -19,12 +21,10 @@ async def main() -> None:
         model=settings.llm_model,
     )
     registry = AgentRegistry()
-    sysadmin = ChiefSysadmin(llm=llm, registry=registry)
-    registry.register(sysadmin)
-    director = Director(
-        llm=llm, registry=registry,
-        available_agents={sysadmin.name: "управление Docker-контейнерами и compose-проектами"},
-    )
+    app_dir = Path(__file__).parent
+    skills = load_all_skills(app_dir / "skills")
+    available = load_agents(app_dir / "agents" / "defs", skills, llm, registry)
+    director = Director(llm=llm, registry=registry, available_agents=available)
     registry.register(director)
 
     bot = create_bot()
