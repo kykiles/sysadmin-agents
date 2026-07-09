@@ -6,7 +6,7 @@ from app.agents.registry import AgentRegistry
 from app.bot.filters import WhitelistFilter
 
 
-def build_router(*, registry: AgentRegistry, allowed_id: int, chat_id: int) -> Router:
+def build_router(*, registry: AgentRegistry, allowed_id: int) -> Router:
     router = Router()
 
     @router.message(WhitelistFilter(allowed_id), Command("start"))

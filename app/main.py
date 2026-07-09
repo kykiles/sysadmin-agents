@@ -28,8 +28,7 @@ async def main() -> None:
     registry.register(director)
 
     bot = create_bot()
-    chat_id = settings.telegram_chat_id or settings.telegram_user_id
-    gateway = TelegramConfirmationGateway(bot, chat_id=chat_id)
+    gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)
     registry.set_confirmation_gateway(gateway)
 
     await registry.run_forever()

@@ -1,14 +1,18 @@
 # Агентская система системного администрирования v1
 
-Серверная мульти-агентная система (Директор + Главный сисадмин), управляемая через Telegram одним пользователем. Управляет Docker-контейнерами и compose-проектами на хосте.
+Серверная мульти-агентная система (Директор + доменные специалисты), управляемая через Telegram одним пользователем. Управляет Docker-контейнерами, compose-проектами, базами данных и хостом.
 
 ## Возможности
 
 - **Директор** — принимает задачи на естественном языке, планирует и делегирует специалистам
-- **Главный сисадмин** — управляет Docker: просмотр контейнеров, логов, статистики, инспекция, перезапуск/остановка/запуск, `docker exec`, `compose up/down`
-- **Безопасные операции** (чтение: `ps`, `logs`, `stats`, `inspect`) — выполняются автоматически
-- **Опасные операции** (мутации: `restart`, `stop`, `start`, `exec`, `compose up/down`) — требуют подтверждения через inline-кнопки в Telegram (таймаут 5 минут, авто-отклонение)
-- **Масштабируемость** — добавление нового специалиста = класс-агент + регистрация в реестре
+- **Доменные специалисты** — собираются декларативно из **skill'ов**:
+  - `dockeradmin` (skill `docker`) — контейнеры и compose: просмотр, логи, статистика, инспекция, перезапуск/остановка/запуск, `docker exec`, `compose up/down`
+  - `dbadmin` (skill `db`) — read-only запросы к БД в контейнерах (psql, mysql, sqlite3)
+  - `hostadmin` (skill `host`) — команды на хосте: firewall/iptables, systemd, диски
+- **Skill** — самодостаточный пакет: плейбук-инструкции в `SKILL.md` + инструменты в `tools.py`
+- **Безопасные операции** (чтение: `ps`, `logs`, `stats`, `inspect`, `docker_query`) — выполняются автоматически
+- **Опасные операции** (мутации: `restart`, `stop`, `start`, `exec`, `compose up/down`, `shell_exec`) — требуют подтверждения через inline-кнопки в Telegram (таймаут 5 минут, авто-отклонение)
+- **Масштабируемость** — новый агент = один markdown-файл (роль + список skill'ов), без правок кода
 
 ## Требования
 
@@ -93,19 +97,22 @@ docker compose up -d --build
 Telegram User
      │
      ▼
-┌─────────┐    Task     ┌───────────┐  delegate_to  ┌───────────────┐
-│  Bot    │ ──────────► │ Director  │ ─────────────► │ ChiefSysadmin │
-│(aiogram)│ ◄────────── │  (Agent)  │ ◄───────────── │   (Agent)     │
-└─────────┘   Result    └───────────┘    Result      └───────────────┘
-                                                           │
-                              ┌────────────────────────────┤
-                              │                        Docker API
-                              ▼                        (aiodocker)
-                       ┌─────────────┐              ┌─────────────┐
-                       │  LLM API    │              │  Docker     │
-                       │ (DeepSeek)  │              │  Engine     │
-                       └─────────────┘              └─────────────┘
+┌─────────┐    Task     ┌───────────┐  delegate_to  ┌──────────────────────────┐
+│  Bot    │ ──────────► │ Director  │ ─────────────► │ dockeradmin / dbadmin /  │
+│(aiogram)│ ◄────────── │  (Agent)  │ ◄───────────── │ hostadmin  (Agents)      │
+└─────────┘   Result    └───────────┘    Result      └──────────────────────────┘
+                                                           │  composed from skills
+                              ┌────────────────────────────┤  (docker / db / host)
+                              │                             ▼
+                              ▼                   ┌──────────────────────────┐
+                       ┌─────────────┐            │ Docker API / host shell  │
+                       │  LLM API    │            │ (aiodocker, subprocess)  │
+                       └─────────────┘            └──────────────────────────┘
 ```
+
+Каждый агент декларируется markdown-файлом (`app/agents/defs/<name>.md`): роль +
+список skill'ов. При старте загрузчики собирают `system_prompt` (роль + плейбуки
+skill'ов) и набор инструментов; `available_agents` Директора формируется автоматически.
 
 **Поток подтверждения опасных операций:** Agent → ConfirmationGateway → Telegram inline-кнопки → пользователь → Agent (выполняет или отклоняет).
 
@@ -125,13 +132,19 @@ opencode_agents_system/
 │   │   └── client.py           # generic LLM client (один round-trip)
 │   ├── tools/
 │   │   ├── base.py             # Tool dataclass, Safety, schema gen
-│   │   └── docker.py           # docker + compose tools
+│   │   └── docker.py           # низкоуровневые docker/compose/shell функции
+│   ├── skills/
+│   │   ├── loader.py           # Skill, load_skill, load_all_skills
+│   │   ├── docker/             # SKILL.md (плейбук) + tools.py (build_tools)
+│   │   ├── db/                 # read-only запросы к БД
+│   │   └── host/              # shell на хосте + firewall-плейбук
 │   ├── agents/
 │   │   ├── messages.py         # Task, Result, ConfirmationRequest
 │   │   ├── registry.py         # AgentRegistry + ConfirmationGateway
 │   │   ├── base.py             # Agent: цикл LLM↔tools
 │   │   ├── director.py         # Director + delegate_to
-│   │   └── sysadmin.py         # ChiefSysadmin + docker tools
+│   │   ├── loader.py           # load_agents: сборка агентов из defs + skills
+│   │   └── defs/               # dockeradmin.md, dbadmin.md, hostadmin.md
 │   └── bot/
 │       ├── filters.py          # WhitelistFilter
 │       ├── keyboards.py        # approve/reject inline keyboard
@@ -154,27 +167,51 @@ opencode_agents_system/
     └── test_bot_handlers.py
 ```
 
-## Добавление нового специалиста
+## Добавление нового skill'а
 
-```python
-# app/agents/new_role.py
-from app.agents.base import Agent
-from app.tools.base import Tool
-
-TOOLS = [...]
-
-class NewSpecialist(Agent):
-    def __init__(self, llm, registry):
-        super().__init__(
-            name="new_specialist",
-            system_prompt="Ты — специалист по ...",
-            tools=TOOLS,
-            llm=llm,
-            registry=registry,
-        )
+```
+app/skills/<skill_name>/
+├── SKILL.md      # фронтматтер (name, description) + markdown-плейбук
+└── tools.py      # build_tools() -> list[Tool]
 ```
 
-Затем зарегистрировать в `app/main.py` и добавить в `available_agents` Директора.
+```markdown
+<!-- SKILL.md -->
+---
+name: myskill
+description: что делает навык (идёт в подсказку Директору через агента)
+---
+
+## Навык: ...
+Инструкции/плейбук для агента, владеющего этим навыком.
+```
+
+```python
+# tools.py
+from app.tools.base import Tool, Safety
+
+def build_tools() -> list[Tool]:
+    return [Tool("my_tool", "...", MyParams, my_fn, Safety.SAFE)]
+```
+
+## Добавление нового агента
+
+Создать один markdown-файл — правки кода не нужны:
+
+```markdown
+<!-- app/agents/defs/myadmin.md -->
+---
+name: myadmin
+description: чем занимается специалист (попадёт в available_agents Директора)
+skills:
+  - myskill
+---
+
+Ты — специалист по ... Получаешь подзадачи от Директора и возвращаешь отчёт.
+```
+
+При старте `load_all_skills` и `load_agents` подхватят skill и агента
+автоматически, а Директор увидит его в списке специалистов.
 
 ## Лицензия
 
