@@ -22,3 +22,11 @@ def test_dialog_memory_defaults(monkeypatch):
     s = Settings()
     assert s.dialog_db_path == "/data/dialog.db"
     assert s.dialog_history_limit == 20
+
+
+def test_deploy_allowed_default(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_USER_ID", "1")
+    s = Settings()
+    assert s.deploy_allowed == ""

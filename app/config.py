@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     audit_log_path: str = Field(default="/data/audit.log", alias="AUDIT_LOG_PATH")
     dialog_db_path: str = Field(default="/data/dialog.db", alias="DIALOG_DB_PATH")
     dialog_history_limit: int = Field(default=20, alias="DIALOG_HISTORY_LIMIT")
+    deploy_allowed: str = Field(default="", alias="DEPLOY_ALLOWED")
 
 
 @lru_cache(maxsize=1)
