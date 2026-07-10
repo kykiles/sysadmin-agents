@@ -8,6 +8,7 @@ services:
     pid: host
     cap_add:
       - NET_ADMIN
+      - SYS_ADMIN
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./audit:/data
