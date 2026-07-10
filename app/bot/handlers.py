@@ -1,3 +1,4 @@
+import asyncio
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
@@ -15,7 +16,7 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
 
     @router.message(WhitelistFilter(allowed_id), Command("reset"))
     async def _reset(message: Message):
-        memory.clear()
+        await asyncio.to_thread(memory.clear)
         await message.answer("История диалога очищена.")
 
     @router.message(WhitelistFilter(allowed_id))

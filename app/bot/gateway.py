@@ -19,7 +19,7 @@ class TelegramConfirmationGateway(ConfirmationGateway):
             fut.set_result(decision)
 
     async def request(self, req: ConfirmationRequest) -> bool:
-        fut = asyncio.get_event_loop().create_future()
+        fut = asyncio.get_running_loop().create_future()
         self._pending[req.task_id] = fut
         text = f"Подтвердите опасное действие:\n{req.tool_name} {req.args}\n\n{req.description}"
         await self._bot.send_message(

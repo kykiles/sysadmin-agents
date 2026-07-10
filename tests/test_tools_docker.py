@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch, MagicMock
 from app.tools import docker as dk
@@ -30,6 +31,44 @@ async def test_docker_logs():
     assert out["logs"] == "line1\nline2\n"
 
 
+async def test_docker_inspect_projects_and_omits_env():
+    c = MagicMock()
+    c.show = AsyncMock(return_value={
+        "Id": "abc",
+        "Name": "/bot",
+        "RestartCount": 3,
+        "State": {"Status": "running", "Running": True, "ExitCode": 0, "Pid": 42},
+        "Config": {"Image": "img", "Env": ["SECRET=shh"]},
+        "HostConfig": {"RestartPolicy": {"Name": "always"}},
+        "NetworkSettings": {"Ports": {"80/tcp": None}},
+        "Mounts": [],
+    })
+    fake = MagicMock()
+    fake.containers = MagicMock()
+    fake.containers.container = MagicMock(return_value=c)
+    fake.__aenter__ = AsyncMock(return_value=fake)
+    fake.__aexit__ = AsyncMock(return_value=None)
+    with patch("app.tools.docker.Docker", return_value=fake):
+        out = await dk.docker_inspect(container="bot")
+    insp = out["inspect"]
+    assert insp["Image"] == "img"
+    assert insp["State"] == {"Status": "running", "Running": True, "ExitCode": 0}
+    assert insp["RestartCount"] == 3
+    assert "Env" not in json.dumps(insp)
+
+
+def test_project_stats_compact():
+    out = dk._project_stats({
+        "memory_stats": {"usage": 100, "limit": 1000, "stats": {"a": 1}},
+        "cpu_stats": {"cpu_usage": {"total_usage": 5}, "system_cpu_usage": 50, "online_cpus": 2},
+        "pids_stats": {"current": 7},
+    })
+    assert out == {
+        "memory_usage": 100, "memory_limit": 1000,
+        "cpu_total_usage": 5, "system_cpu_usage": 50, "online_cpus": 2, "pids": 7,
+    }
+
+
 async def test_docker_restart_dangerous():
     c = MagicMock()
     c.restart = AsyncMock(return_value=None)
@@ -54,6 +93,22 @@ async def test_compose_ls(tmp_path, monkeypatch):
             with patch("app.tools.docker.os.path.isfile", return_value=True):
                 out = await dk.compose_ls()
     assert out["projects"] == ["web"]
+
+
+async def test_run_subprocess_timeout_kills():
+    proc = MagicMock()
+
+    async def _hang(*a, **k):
+        await asyncio.sleep(10)
+
+    proc.communicate = _hang
+    proc.kill = MagicMock()
+    proc.wait = AsyncMock(return_value=None)
+    with patch("app.tools.docker.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        out = await dk._run_subprocess(["sleep", "10"], timeout=0.05)
+    assert out["timed_out"] is True
+    assert out["returncode"] is None
+    proc.kill.assert_called_once()
 
 
 async def test_compose_up_runs_subprocess(monkeypatch):

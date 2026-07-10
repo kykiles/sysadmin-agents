@@ -17,11 +17,13 @@ class Settings(BaseSettings):
     telegram_user_id: int = Field(alias="TELEGRAM_USER_ID")
 
     compose_projects_dir: str = Field(default="/opt", alias="COMPOSE_PROJECTS_DIR")
+    shell_timeout_seconds: int = Field(default=120, alias="SHELL_TIMEOUT_SECONDS")
     agent_max_iterations: int = Field(default=10, alias="AGENT_MAX_ITERATIONS")
     confirmation_timeout_seconds: int = Field(
         default=300, alias="CONFIRMATION_TIMEOUT_SECONDS"
     )
     audit_log_path: str = Field(default="/data/audit.log", alias="AUDIT_LOG_PATH")
+    audit_trail_path: str = Field(default="/data/audit.jsonl", alias="AUDIT_TRAIL_PATH")
     dialog_db_path: str = Field(default="/data/dialog.db", alias="DIALOG_DB_PATH")
     dialog_history_limit: int = Field(default=20, alias="DIALOG_HISTORY_LIMIT")
     deploy_allowed: str = Field(default="", alias="DEPLOY_ALLOWED")

@@ -1,5 +1,6 @@
 import asyncio
 import os
+from typing import Any
 from pydantic import BaseModel, Field
 from aiodocker import Docker
 from app.config import settings
@@ -33,12 +34,52 @@ class ProjectParams(BaseModel):
     project: str = Field(description="compose project dir name under COMPOSE_PROJECTS_DIR")
 
 
+# ---------- projections (keep LLM context small) ----------
+
+def _project_container(c: dict) -> dict:
+    return {k: c.get(k) for k in ("Id", "Names", "Image", "State", "Status", "Ports") if k in c}
+
+
+def _project_inspect(info: dict) -> dict:
+    state = info.get("State") or {}
+    config = info.get("Config") or {}
+    host = info.get("HostConfig") or {}
+    net = info.get("NetworkSettings") or {}
+    return {
+        "Id": info.get("Id"),
+        "Name": info.get("Name"),
+        "Image": config.get("Image"),
+        "State": {k: state.get(k) for k in (
+            "Status", "Running", "Paused", "Restarting", "OOMKilled",
+            "Dead", "ExitCode", "StartedAt", "FinishedAt", "Health") if k in state},
+        "RestartCount": info.get("RestartCount"),
+        "RestartPolicy": host.get("RestartPolicy"),
+        "Ports": net.get("Ports"),
+        "Mounts": info.get("Mounts"),
+    }
+
+
+def _project_stats(stats: Any) -> dict:
+    if not isinstance(stats, dict):
+        return {"raw": stats}
+    mem = stats.get("memory_stats") or {}
+    cpu = stats.get("cpu_stats") or {}
+    return {
+        "memory_usage": mem.get("usage"),
+        "memory_limit": mem.get("limit"),
+        "cpu_total_usage": (cpu.get("cpu_usage") or {}).get("total_usage"),
+        "system_cpu_usage": cpu.get("system_cpu_usage"),
+        "online_cpus": cpu.get("online_cpus"),
+        "pids": (stats.get("pids_stats") or {}).get("current"),
+    }
+
+
 # ---------- safe docker api ----------
 
 async def docker_ps() -> dict:
     async with Docker() as docker:
         containers = await docker.containers.list(all=True)
-        return {"containers": [c._container for c in containers]}
+        return {"containers": [_project_container(c._container) for c in containers]}
 
 
 async def docker_logs(container: str, tail: int = 200) -> dict:
@@ -52,14 +93,14 @@ async def docker_stats(container: str) -> dict:
     async with Docker() as docker:
         c = docker.containers.container(container)
         stats = await c.stats(stream=False)
-        return {"container": container, "stats": stats}
+        return {"container": container, "stats": _project_stats(stats)}
 
 
 async def docker_inspect(container: str) -> dict:
     async with Docker() as docker:
         c = docker.containers.container(container)
         info = await c.show()
-        return {"container": container, "inspect": info}
+        return {"container": container, "inspect": _project_inspect(info)}
 
 
 # ---------- dangerous docker api ----------
@@ -90,7 +131,11 @@ async def docker_exec(container: str, command: list[str]) -> dict:
         c = docker.containers.container(container)
         exec_obj = await c.exec(cmd=command)
         stream = exec_obj.start(detach=False)
-        msg = await stream.read_out()
+        try:
+            msg = await asyncio.wait_for(stream.read_out(), timeout=settings.shell_timeout_seconds)
+        except asyncio.TimeoutError:
+            return {"container": container, "command": command, "output": "",
+                    "exit_code": None, "timed_out": True}
         output = msg.data.decode(errors="replace") if msg.data else ""
         inspect = await exec_obj.inspect()
         return {"container": container, "command": command, "output": output, "exit_code": inspect.get("ExitCode")}
@@ -98,17 +143,33 @@ async def docker_exec(container: str, command: list[str]) -> dict:
 
 # ---------- host shell ----------
 
-async def shell_exec(command: list[str]) -> dict:
+async def _run_subprocess(command: list[str], timeout: float | None = None) -> dict:
+    to = timeout if timeout is not None else settings.shell_timeout_seconds
     proc = await asyncio.create_subprocess_exec(
         *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=to)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {
+            "command": command,
+            "returncode": None,
+            "stdout": "",
+            "stderr": f"команда прервана по таймауту ({to}s)",
+            "timed_out": True,
+        }
     return {
         "command": command,
         "returncode": proc.returncode,
         "stdout": stdout.decode(errors="replace"),
         "stderr": stderr.decode(errors="replace"),
     }
+
+
+async def shell_exec(command: list[str]) -> dict:
+    return await _run_subprocess(command)
 
 
 # ---------- compose (subprocess) ----------
@@ -120,16 +181,14 @@ def _project_dir(project: str) -> str:
 async def _compose(project: str, *args: str) -> dict:
     pd = _project_dir(project)
     cmd = ["docker", "compose", "--project-directory", pd, "-f", os.path.join(pd, "docker-compose.yml"), *args]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
+    res = await _run_subprocess(cmd)
     return {
         "project": project,
         "command": list(args),
-        "returncode": proc.returncode,
-        "stdout": stdout.decode(errors="replace"),
-        "stderr": stderr.decode(errors="replace"),
+        "returncode": res["returncode"],
+        "stdout": res["stdout"],
+        "stderr": res["stderr"],
+        **({"timed_out": True} if res.get("timed_out") else {}),
     }
 
 

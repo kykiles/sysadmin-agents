@@ -32,7 +32,7 @@ class AgentRegistry:
         return list(self._agents.keys())
 
     async def request(self, agent_name: str, task: Task) -> Result:
-        fut = asyncio.get_event_loop().create_future()
+        fut = asyncio.get_running_loop().create_future()
         self._pending[task.id] = fut
         await self._inboxes[agent_name].put(task)
         return await fut

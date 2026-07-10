@@ -66,6 +66,61 @@ async def test_dangerous_rejected():
     assert "rejected" in res.content
 
 
+async def test_dangerous_action_is_audited(tmp_path, monkeypatch):
+    from app import audit
+
+    path = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(audit.settings, "audit_trail_path", str(path))
+
+    class Q(BaseModel):
+        c: str
+
+    async def _danger(c: str) -> dict:
+        return {"returncode": 0, "done": c}
+
+    dt = Tool(name="restart", description="d", params_model=Q, fn=_danger, safety=Safety.DANGEROUS)
+
+    class YesGateway:
+        async def request(self, req: ConfirmationRequest) -> bool:
+            return True
+
+    tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"c": "bot"})))])
+    final = ChoiceMessage(content="готово", tool_calls=None)
+    llm = FakeLLM([tc, final])
+    reg = AgentRegistry()
+    reg.set_confirmation_gateway(YesGateway())
+    agent = Agent(name="hostadmin", system_prompt="sys", tools=[dt], llm=llm, registry=reg)
+    await agent.handle(Task(content="restart bot"))
+    rec = json.loads(path.read_text(encoding="utf-8").strip())
+    assert rec["agent"] == "hostadmin"
+    assert rec["tool"] == "restart"
+    assert rec["decision"] == "approved"
+    assert rec["result"]["returncode"] == 0
+
+
+async def test_max_iterations_keeps_partial_answer(monkeypatch):
+    from app.agents import base as base_mod
+
+    monkeypatch.setattr(base_mod.settings, "agent_max_iterations", 2)
+    tool = make_tool()
+
+    def _tool_msg(i):
+        return ChoiceMessage(
+            content=f"работаю, шаг {i}",
+            tool_calls=[ToolCall(id=f"c{i}", function=ToolCallFunction(name="echo", arguments=json.dumps({"x": "hi"})))],
+        )
+
+    llm = FakeLLM([_tool_msg(1), _tool_msg(2)])
+    reg = AgentRegistry()
+    mem = FakeMemory()
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm, registry=reg, memory=mem)
+    res = await agent.handle(Task(content="do it"))
+    assert res.success is False
+    assert "работаю, шаг 2" in res.content
+    assert "лимит итераций" in res.content
+    assert mem.items[-1]["content"] == res.content
+
+
 class FakeMemory:
     def __init__(self):
         self.items = []
