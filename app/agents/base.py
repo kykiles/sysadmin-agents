@@ -17,24 +17,31 @@ class Agent:
         tools: list[Tool],
         llm: LLMClient,
         registry: AgentRegistry,
+        memory=None,
     ):
         self.name = name
         self.system_prompt = system_prompt
         self.tools = tools
         self._llm = llm
         self._registry = registry
+        self._memory = memory
 
     def _find_tool(self, name: str) -> Tool | None:
         return next((t for t in self.tools if t.name == name), None)
 
     async def handle(self, task: Task) -> Result:
+        history = self._memory.load() if self._memory else []
         messages = [
             {"role": "system", "content": self.system_prompt},
+            *history,
             {"role": "user", "content": task.content},
         ]
         for _ in range(settings.agent_max_iterations):
             msg = await self._llm.chat(messages, [t.schema() for t in self.tools])
             if not msg.tool_calls:
+                if self._memory:
+                    self._memory.append("user", task.content)
+                    self._memory.append("assistant", msg.content or "")
                 return Result(task_id=task.id, content=msg.content or "")
             messages.append({
                 "role": "assistant",

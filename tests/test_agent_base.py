@@ -23,8 +23,10 @@ def make_tool():
 class FakeLLM:
     def __init__(self, responses):
         self._r = responses
+        self.last_messages = None
 
     async def chat(self, messages, tools=None):
+        self.last_messages = list(messages)
         return self._r.pop(0)
 
 
@@ -62,3 +64,52 @@ async def test_dangerous_rejected():
     res = await agent.handle(Task(content="restart bot"))
     assert res.success is True
     assert "rejected" in res.content
+
+
+class FakeMemory:
+    def __init__(self):
+        self.items = []
+
+    def load(self):
+        return list(self.items)
+
+    def append(self, role, content):
+        self.items.append({"role": role, "content": content})
+
+
+async def test_agent_saves_final_turn_to_memory():
+    mem = FakeMemory()
+    final = ChoiceMessage(content="готово", tool_calls=None)
+    llm = FakeLLM([final])
+    reg = AgentRegistry()
+    agent = Agent(name="d", system_prompt="sys", tools=[], llm=llm, registry=reg, memory=mem)
+    await agent.handle(Task(content="сделай"))
+    assert mem.items == [
+        {"role": "user", "content": "сделай"},
+        {"role": "assistant", "content": "готово"},
+    ]
+
+
+async def test_agent_loads_history_into_prompt():
+    mem = FakeMemory()
+    mem.append("user", "прошлый вопрос")
+    mem.append("assistant", "прошлый ответ")
+    final = ChoiceMessage(content="ок", tool_calls=None)
+    llm = FakeLLM([final])
+    reg = AgentRegistry()
+    agent = Agent(name="d", system_prompt="sys", tools=[], llm=llm, registry=reg, memory=mem)
+    await agent.handle(Task(content="новый"))
+    contents = [m["content"] for m in llm.last_messages]
+    assert "прошлый вопрос" in contents
+    assert "прошлый ответ" in contents
+    assert contents[0] == "sys"
+    assert contents[-1] == "новый"
+
+
+async def test_agent_without_memory_unchanged():
+    final = ChoiceMessage(content="ответ", tool_calls=None)
+    llm = FakeLLM([final])
+    reg = AgentRegistry()
+    agent = Agent(name="t", system_prompt="sys", tools=[], llm=llm, registry=reg)
+    res = await agent.handle(Task(content="q"))
+    assert res.content == "ответ"
