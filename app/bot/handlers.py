@@ -6,12 +6,17 @@ from app.agents.registry import AgentRegistry
 from app.bot.filters import WhitelistFilter
 
 
-def build_router(*, registry: AgentRegistry, allowed_id: int) -> Router:
+def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
     router = Router()
 
     @router.message(WhitelistFilter(allowed_id), Command("start"))
     async def _start(message: Message):
         await message.answer("Система активна. Опишите задачу.")
+
+    @router.message(WhitelistFilter(allowed_id), Command("reset"))
+    async def _reset(message: Message):
+        memory.clear()
+        await message.answer("История диалога очищена.")
 
     @router.message(WhitelistFilter(allowed_id))
     async def _task(message: Message):

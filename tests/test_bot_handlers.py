@@ -24,3 +24,15 @@ async def test_callback_approve_resolves_gateway():
 
     gw._resolve("abc", True)
     assert fut.result() is True
+
+
+def test_build_router_accepts_memory():
+    from app.bot.handlers import build_router
+
+    class DummyMem:
+        def __init__(self): self.cleared = False
+        def clear(self): self.cleared = True
+
+    reg = AgentRegistry()
+    router = build_router(registry=reg, allowed_id=1, memory=DummyMem())
+    assert router is not None

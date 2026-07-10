@@ -12,10 +12,11 @@ def create_bot() -> Bot:
     )
 
 
-def create_dispatcher(*, registry: AgentRegistry) -> Dispatcher:
+def create_dispatcher(*, registry: AgentRegistry, memory) -> Dispatcher:
     dp = Dispatcher()
     dp.include_router(build_router(
         registry=registry,
         allowed_id=settings.telegram_user_id,
+        memory=memory,
     ))
     return dp

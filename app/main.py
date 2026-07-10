@@ -37,7 +37,7 @@ async def main() -> None:
     registry.set_confirmation_gateway(gateway)
 
     await registry.run_forever()
-    dp = create_dispatcher(registry=registry)
+    dp = create_dispatcher(registry=registry, memory=history)
 
     log.info("startup", model=settings.llm_model, agents=registry.available_agents())
     try:
