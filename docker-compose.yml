@@ -9,6 +9,9 @@ services:
     cap_add:
       - NET_ADMIN
       - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./audit:/data
