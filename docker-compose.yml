@@ -9,6 +9,7 @@ services:
     cap_add:
       - NET_ADMIN
       - SYS_ADMIN
+      - SYS_PTRACE
     security_opt:
       - seccomp:unconfined
       - apparmor:unconfined
