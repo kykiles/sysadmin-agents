@@ -24,7 +24,7 @@ def build_director_prompt(available_agents: dict[str, str]) -> str:
 
 
 class Director(Agent):
-    def __init__(self, llm: LLMClient, registry: AgentRegistry, available_agents: dict[str, str]):
+    def __init__(self, llm: LLMClient, registry: AgentRegistry, available_agents: dict[str, str], memory=None):
         async def _delegate(agent_name: str, task: str) -> dict:
             result = await registry.request(agent_name, Task(content=task))
             return {"agent": agent_name, "result": result.content, "success": result.success}
@@ -42,4 +42,5 @@ class Director(Agent):
             tools=[delegate_tool],
             llm=llm,
             registry=registry,
+            memory=memory,
         )

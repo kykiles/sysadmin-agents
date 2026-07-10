@@ -30,3 +30,14 @@ async def test_director_delegates_and_summarizes():
     res = await director.handle(Task(content="посмотри логи"))
     await reg.stop()
     assert "Отчёт" in res.content
+
+
+def test_director_wires_memory():
+    class DummyMem:
+        def load(self): return []
+        def append(self, r, c): ...
+
+    mem = DummyMem()
+    reg = AgentRegistry()
+    d = Director(llm=None, registry=reg, available_agents={}, memory=mem)
+    assert d._memory is mem

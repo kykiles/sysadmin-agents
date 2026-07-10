@@ -7,6 +7,7 @@ from app.agents.registry import AgentRegistry
 from app.agents.director import Director
 from app.agents.loader import load_agents
 from app.skills.loader import load_all_skills
+from app.memory.history import DialogHistory
 from app.bot.bot import create_bot, create_dispatcher
 from app.bot.gateway import TelegramConfirmationGateway
 
@@ -24,7 +25,11 @@ async def main() -> None:
     app_dir = Path(__file__).parent
     skills = load_all_skills(app_dir / "skills")
     available = load_agents(app_dir / "agents" / "defs", skills, llm, registry)
-    director = Director(llm=llm, registry=registry, available_agents=available)
+    history = DialogHistory(
+        db_path=settings.dialog_db_path,
+        limit=settings.dialog_history_limit,
+    )
+    director = Director(llm=llm, registry=registry, available_agents=available, memory=history)
     registry.register(director)
 
     bot = create_bot()
