@@ -9,6 +9,7 @@
   - `dockeradmin` (skill `docker`) — контейнеры и compose: просмотр, логи, статистика, инспекция, перезапуск/остановка/запуск, `docker exec`, `compose up/down`
   - `dbadmin` (skill `db`) — read-only запросы к БД в контейнерах (psql, mysql, sqlite3)
   - `hostadmin` (skill `host`) — команды на хосте: firewall/iptables, systemd, диски
+  - `deployadmin` (skill `deploy`) — деплой сайтов под `/opt` на хосте: определяет способ (`deployments/deploy.sh` → `make deploy` → `docker compose up -d --build`) и выполняет его через `nsenter`
 - **Skill** — самодостаточный пакет: плейбук-инструкции в `SKILL.md` + инструменты в `tools.py`
 - **Безопасные операции** (чтение: `ps`, `logs`, `stats`, `inspect`, `docker_query`) — выполняются автоматически
 - **Опасные операции** (мутации: `restart`, `stop`, `start`, `exec`, `compose up/down`, `shell_exec`) — требуют подтверждения через inline-кнопки в Telegram (таймаут 5 минут, авто-отклонение)
@@ -58,6 +59,7 @@ cp .env.example .env
 | `AUDIT_LOG_PATH` | `/data/audit.log` | Путь к аудит-логу |
 | `DIALOG_DB_PATH` | `/data/dialog.db` | Путь к SQLite-базе диалоговой памяти |
 | `DIALOG_HISTORY_LIMIT` | `20` | Сколько последних реплик Директор помнит |
+| `DEPLOY_ALLOWED` | (пусто) | Сайты под `/opt`, разрешённые для деплоя (через запятую); пустой = деплой запрещён |
 
 ### 3. Получение Telegram User ID
 
@@ -94,6 +96,8 @@ docker compose up -d --build
 4. Получите отчёт от Директора
 
 **Диалоговая память.** Директор помнит последние `DIALOG_HISTORY_LIMIT` реплик диалога (хранятся в SQLite `/data/dialog.db`, переживают рестарт контейнера), поэтому можно ссылаться на предыдущий контекст: «а теперь перезапусти его». Команда `/reset` очищает историю и начинает диалог заново. Специалисты остаются без памяти — каждая делегированная задача самодостаточна.
+
+**Деплой сайтов.** `deployadmin` деплоит сайты под `/opt` **на самом хосте** (через `nsenter` в namespace хостового init — контейнеру нужны `SYS_ADMIN`/`SYS_PTRACE`). Способ определяется автоматически: свой `deployments/deploy.sh` → цель `deploy` в `Makefile` → `docker compose up -d --build`. Деплоить можно только сайты из `DEPLOY_ALLOWED`; сам запуск — опасная операция и требует подтверждения. Например: «покажи план деплоя glowshine» (безопасно, `deploy_plan`) → «задеплой glowshine» (подтверждение → `deploy_run`).
 
 ## Архитектура
 
