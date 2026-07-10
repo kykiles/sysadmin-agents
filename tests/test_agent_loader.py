@@ -28,6 +28,14 @@ def test_load_agents_composes_prompt_and_tools():
     assert "управление Docker" in agent.system_prompt
 
 
+def test_deployadmin_agent_registered():
+    skills = load_all_skills(SKILLS_DIR)
+    reg = AgentRegistry()
+    available = load_agents(DEFS_DIR, skills, FakeLLM(), reg)
+    assert "deployadmin" in available
+    assert "deploy_run" in {t.name for t in reg.get_agent("deployadmin").tools}
+
+
 def test_load_agents_unknown_skill_raises(tmp_path):
     bad = tmp_path / "bad.md"
     bad.write_text("---\nname: bad\ndescription: x\nskills:\n  - nope\n---\nроль", encoding="utf-8")

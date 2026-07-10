@@ -56,3 +56,11 @@ def test_db_and_host_skills_load():
     assert skills["db"].tools[0].safety is Safety.SAFE
     assert "shell_exec" in host_tools
     assert host_tools["shell_exec"].safety is Safety.DANGEROUS
+
+
+def test_deploy_skill_loads():
+    skills = load_all_skills(SKILLS_DIR)
+    assert "deploy" in skills
+    names = {t.name: t for t in skills["deploy"].tools}
+    assert names["deploy_plan"].safety is Safety.SAFE
+    assert names["deploy_run"].safety is Safety.DANGEROUS
