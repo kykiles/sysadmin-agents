@@ -30,7 +30,7 @@ class TelegramConfirmationGateway(ConfirmationGateway):
             return Decision.AUTO_APPROVED
         fut = asyncio.get_running_loop().create_future()
         self._pending[req.task_id] = fut
-        text = f"Подтвердите опасное действие:\n{req.tool_name} {req.args}\n\n{req.description}"
+        text = f"Подтвердите опасное действие:\n{req.description}"
         await self._bot.send_message(
             self._chat_id, text, reply_markup=approve_keyboard(req.task_id, req.tool_name)
         )

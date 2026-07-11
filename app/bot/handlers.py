@@ -38,7 +38,7 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
                 gw._resolve(task_id, Decision.APPROVED)
             else:
                 gw._resolve(task_id, Decision.REJECTED)
-        labels = {"yes": "Approve", "no": "Reject", "all": "Разрешено всё в задаче"}
+        labels = {"yes": "Yes", "no": "No", "all": "Yes, and don't ask again"}
         await callback.answer(labels.get(choice, choice))
         await callback.message.edit_text(
             callback.message.text + f"\n\n> Решение: {labels.get(choice, choice)}",
