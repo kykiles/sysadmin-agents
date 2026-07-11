@@ -27,14 +27,21 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
 
     @router.callback_query(F.data.startswith("cf:"))
     async def _confirm(callback: CallbackQuery):
-        _, task_id, decision = callback.data.split(":")
+        _, task_id, choice = callback.data.split(":")
         from app.bot.gateway import TelegramConfirmationGateway
         gw = registry._gateway
         if isinstance(gw, TelegramConfirmationGateway):
-            gw._resolve(task_id, Decision.APPROVED if decision == "yes" else Decision.REJECTED)
-        await callback.answer("Подтверждено" if decision == "yes" else "Отклонено")
+            if choice == "all":
+                gw._scoped.add(task_id)
+                gw._resolve(task_id, Decision.APPROVED)
+            elif choice == "yes":
+                gw._resolve(task_id, Decision.APPROVED)
+            else:
+                gw._resolve(task_id, Decision.REJECTED)
+        labels = {"yes": "Approve", "no": "Reject", "all": "Разрешено всё в задаче"}
+        await callback.answer(labels.get(choice, choice))
         await callback.message.edit_text(
-            callback.message.text + f"\n\n> Решение: {'Approve' if decision == 'yes' else 'Reject'}",
+            callback.message.text + f"\n\n> Решение: {labels.get(choice, choice)}",
             parse_mode=None,
         )
 
