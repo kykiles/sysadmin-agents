@@ -2,7 +2,7 @@ import asyncio
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
-from app.agents.messages import Task
+from app.agents.messages import Task, Decision
 from app.agents.registry import AgentRegistry
 from app.bot.filters import WhitelistFilter
 
@@ -31,7 +31,7 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
         from app.bot.gateway import TelegramConfirmationGateway
         gw = registry._gateway
         if isinstance(gw, TelegramConfirmationGateway):
-            gw._resolve(task_id, decision == "yes")
+            gw._resolve(task_id, Decision.APPROVED if decision == "yes" else Decision.REJECTED)
         await callback.answer("Подтверждено" if decision == "yes" else "Отклонено")
         await callback.message.edit_text(
             callback.message.text + f"\n\n> Решение: {'Approve' if decision == 'yes' else 'Reject'}",

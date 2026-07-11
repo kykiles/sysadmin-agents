@@ -1,7 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 from app.agents.registry import AgentRegistry
-from app.agents.messages import Task, Result
+from app.agents.messages import Task, Result, Decision
 from app.bot.gateway import TelegramConfirmationGateway
 
 
@@ -22,8 +22,8 @@ async def test_callback_approve_resolves_gateway():
     fut = asyncio.get_event_loop().create_future()
     gw._pending["abc"] = fut
 
-    gw._resolve("abc", True)
-    assert fut.result() is True
+    gw._resolve("abc", Decision.APPROVED)
+    assert fut.result() is Decision.APPROVED
 
 
 def test_build_router_accepts_memory():

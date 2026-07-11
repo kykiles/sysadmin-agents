@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from app.agents.messages import Task, Result, ConfirmationRequest
+from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 from app.agents.registry import AgentRegistry, ConfirmationGateway
 
 
@@ -17,11 +17,11 @@ class FakeAgent:
 
 
 class FakeGateway:
-    def __init__(self, decision: bool):
+    def __init__(self, decision: Decision):
         self.decision = decision
         self.received: list[ConfirmationRequest] = []
 
-    async def request(self, req: ConfirmationRequest) -> bool:
+    async def request(self, req: ConfirmationRequest) -> Decision:
         self.received.append(req)
         return self.decision
 
@@ -29,7 +29,7 @@ class FakeGateway:
 async def test_delegate_returns_result():
     reg = AgentRegistry()
     reg.register(FakeAgent("sysadmin", lambda t: Result(task_id=t.id, content="done")))
-    reg.set_confirmation_gateway(FakeGateway(True))
+    reg.set_confirmation_gateway(FakeGateway(Decision.APPROVED))
     asyncio.create_task(reg._consume("sysadmin"))
     res = await reg.request("sysadmin", Task(content="hi"))
     await reg.stop()
@@ -38,8 +38,8 @@ async def test_delegate_returns_result():
 
 async def test_confirm_routes_to_gateway():
     reg = AgentRegistry()
-    gw = FakeGateway(False)
+    gw = FakeGateway(Decision.REJECTED)
     reg.set_confirmation_gateway(gw)
     decision = await reg.confirm(ConfirmationRequest(task_id="x", tool_name="docker_restart", args={}, description="d"))
-    assert decision is False
+    assert decision is Decision.REJECTED
     assert gw.received[0].tool_name == "docker_restart"
