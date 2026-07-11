@@ -1,5 +1,12 @@
 import uuid
+from enum import Enum
 from pydantic import BaseModel, Field
+
+
+class Decision(str, Enum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    AUTO_APPROVED = "auto-approved"
 
 
 class Task(BaseModel):

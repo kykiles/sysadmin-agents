@@ -1,4 +1,4 @@
-from app.agents.messages import Task, Result, ConfirmationRequest
+from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 
 
 def test_task_has_id():
@@ -11,3 +11,10 @@ def test_task_has_id():
 def test_result_defaults():
     r = Result(task_id="1", content="ok")
     assert r.success is True
+
+
+def test_decision_values_match_audit_strings():
+    assert Decision.APPROVED.value == "approved"
+    assert Decision.REJECTED.value == "rejected"
+    assert Decision.AUTO_APPROVED.value == "auto-approved"
+    assert isinstance(Decision.APPROVED, str)
