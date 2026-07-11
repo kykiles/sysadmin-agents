@@ -36,6 +36,29 @@ async def test_delegate_returns_result():
     assert res.content == "done"
 
 
+async def test_consume_releases_scope_after_handle():
+    released = []
+
+    class RecordingGateway:
+        async def request(self, req):
+            return Decision.APPROVED
+        def release(self, task_id):
+            released.append(task_id)
+
+    reg = AgentRegistry()
+    reg.set_confirmation_gateway(RecordingGateway())
+
+    def boom(t):
+        raise RuntimeError("fail")
+
+    reg.register(FakeAgent("worker", boom))
+    asyncio.create_task(reg._consume("worker"))
+    task = Task(content="hi")
+    await reg.request("worker", task)
+    await reg.stop()
+    assert task.id in released
+
+
 async def test_confirm_routes_to_gateway():
     reg = AgentRegistry()
     gw = FakeGateway(Decision.REJECTED)

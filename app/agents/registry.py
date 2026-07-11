@@ -57,6 +57,9 @@ class AgentRegistry:
             except Exception as e:
                 log.error("agent_failed", agent=name, error=str(e))
                 result = Result(task_id=task.id, content=f"error: {e}", success=False)
+            finally:
+                if self._gateway is not None and hasattr(self._gateway, "release"):
+                    self._gateway.release(task.id)
             await self.respond(result)
 
     async def run_forever(self) -> None:
