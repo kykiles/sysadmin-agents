@@ -12,13 +12,22 @@ class TelegramConfirmationGateway(ConfirmationGateway):
         self._chat_id = chat_id
         self._timeout = timeout if timeout is not None else settings.confirmation_timeout_seconds
         self._pending: dict[str, asyncio.Future[Decision]] = {}
+        self._scoped: set[str] = set()
 
     def _resolve(self, task_id: str, decision: Decision) -> None:
         fut = self._pending.get(task_id)
         if fut and not fut.done():
             fut.set_result(decision)
 
+    def release(self, task_id: str) -> None:
+        self._scoped.discard(task_id)
+
     async def request(self, req: ConfirmationRequest) -> Decision:
+        if req.task_id in self._scoped:
+            await self._bot.send_message(
+                self._chat_id, f"🔓 Авто-одобрено: {req.tool_name} {req.args}"
+            )
+            return Decision.AUTO_APPROVED
         fut = asyncio.get_running_loop().create_future()
         self._pending[req.task_id] = fut
         text = f"Подтвердите опасное действие:\n{req.tool_name} {req.args}\n\n{req.description}"
