@@ -1,13 +1,13 @@
 import asyncio
 from typing import Protocol
-from app.agents.messages import Task, Result, ConfirmationRequest
+from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 from app.logging import get_logger
 
 log = get_logger("registry")
 
 
 class ConfirmationGateway(Protocol):
-    async def request(self, req: ConfirmationRequest) -> bool: ...
+    async def request(self, req: ConfirmationRequest) -> Decision: ...
 
 
 class AgentRegistry:
@@ -42,9 +42,9 @@ class AgentRegistry:
         if fut and not fut.done():
             fut.set_result(result)
 
-    async def confirm(self, req: ConfirmationRequest) -> bool:
+    async def confirm(self, req: ConfirmationRequest) -> Decision:
         if self._gateway is None:
-            return False
+            return Decision.REJECTED
         return await self._gateway.request(req)
 
     async def _consume(self, name: str) -> None:
@@ -57,6 +57,9 @@ class AgentRegistry:
             except Exception as e:
                 log.error("agent_failed", agent=name, error=str(e))
                 result = Result(task_id=task.id, content=f"error: {e}", success=False)
+            finally:
+                if self._gateway is not None and hasattr(self._gateway, "release"):
+                    self._gateway.release(task.id)
             await self.respond(result)
 
     async def run_forever(self) -> None:

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 from pydantic import BaseModel
 from app.agents.base import Agent
 from app.agents.registry import AgentRegistry
-from app.agents.messages import Task, Result, ConfirmationRequest
+from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 from app.tools.base import Tool, Safety
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
 
@@ -52,8 +52,8 @@ async def test_dangerous_rejected():
     dt = Tool(name="restart", description="d", params_model=Q, fn=_danger, safety=Safety.DANGEROUS)
 
     class NoGateway:
-        async def request(self, req: ConfirmationRequest) -> bool:
-            return False
+        async def request(self, req: ConfirmationRequest) -> Decision:
+            return Decision.REJECTED
 
     tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"c": "bot"})))])
     final = ChoiceMessage(content="rejected", tool_calls=None)
@@ -81,8 +81,8 @@ async def test_dangerous_action_is_audited(tmp_path, monkeypatch):
     dt = Tool(name="restart", description="d", params_model=Q, fn=_danger, safety=Safety.DANGEROUS)
 
     class YesGateway:
-        async def request(self, req: ConfirmationRequest) -> bool:
-            return True
+        async def request(self, req: ConfirmationRequest) -> Decision:
+            return Decision.APPROVED
 
     tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"c": "bot"})))])
     final = ChoiceMessage(content="готово", tool_calls=None)
@@ -95,6 +95,36 @@ async def test_dangerous_action_is_audited(tmp_path, monkeypatch):
     assert rec["agent"] == "hostadmin"
     assert rec["tool"] == "restart"
     assert rec["decision"] == "approved"
+    assert rec["result"]["returncode"] == 0
+
+
+async def test_auto_approved_action_is_audited(tmp_path, monkeypatch):
+    from app import audit
+
+    path = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(audit.settings, "audit_trail_path", str(path))
+
+    class Q(BaseModel):
+        c: str
+
+    async def _danger(c: str) -> dict:
+        return {"returncode": 0, "done": c}
+
+    dt = Tool(name="restart", description="d", params_model=Q, fn=_danger, safety=Safety.DANGEROUS)
+
+    class AutoGateway:
+        async def request(self, req: ConfirmationRequest) -> Decision:
+            return Decision.AUTO_APPROVED
+
+    tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"c": "bot"})))])
+    final = ChoiceMessage(content="готово", tool_calls=None)
+    llm = FakeLLM([tc, final])
+    reg = AgentRegistry()
+    reg.set_confirmation_gateway(AutoGateway())
+    agent = Agent(name="hostadmin", system_prompt="sys", tools=[dt], llm=llm, registry=reg)
+    await agent.handle(Task(content="restart bot"))
+    rec = json.loads(path.read_text(encoding="utf-8").strip())
+    assert rec["decision"] == "auto-approved"
     assert rec["result"]["returncode"] == 0
 
 

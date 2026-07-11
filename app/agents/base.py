@@ -4,7 +4,7 @@ from app import audit
 from app.config import settings
 from app.llm.client import LLMClient
 from app.tools.base import Tool, Safety
-from app.agents.messages import Task, Result, ConfirmationRequest
+from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 from app.agents.registry import AgentRegistry
 from app.logging import get_logger
 
@@ -71,8 +71,8 @@ class Agent:
                             description=f"{tool.name} {args}",
                         )
                         log.info("confirmation_required", agent=self.name, tool=tool.name, args=args)
-                        ok = await self._registry.confirm(req)
-                        if not ok:
+                        decision = await self._registry.confirm(req)
+                        if decision is Decision.REJECTED:
                             out = json.dumps({"error": "rejected by user"})
                         else:
                             out = await tool.execute(args)
@@ -80,7 +80,7 @@ class Agent:
                             agent=self.name,
                             tool=tool.name,
                             args=args,
-                            decision="approved" if ok else "rejected",
+                            decision=decision.value,
                             result=audit.outcome(out),
                         )
                     else:
