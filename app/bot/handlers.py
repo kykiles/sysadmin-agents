@@ -14,6 +14,18 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
     async def _start(message: Message):
         await message.answer("Система активна. Опишите задачу.")
 
+    @router.message(WhitelistFilter(allowed_id), Command("help"))
+    async def _help(message: Message):
+        await message.answer(
+            "Опишите задачу обычным текстом — Директор разберёт её и делегирует "
+            "специалисту (Docker, БД, хост). Опасные операции требуют подтверждения.\n\n"
+            "Команды:\n"
+            "/start — проверить, что система активна\n"
+            "/help — эта справка\n"
+            "/reset — очистить историю диалога",
+            parse_mode=None,
+        )
+
     @router.message(WhitelistFilter(allowed_id), Command("reset"))
     async def _reset(message: Message):
         await asyncio.to_thread(memory.clear, str(message.chat.id))

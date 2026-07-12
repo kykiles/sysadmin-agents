@@ -9,7 +9,7 @@ from app.agents.loader import load_agents
 from app.skills.loader import load_all_skills
 from app.memory.history import DialogHistory
 from app.memory.facts import init_store
-from app.bot.bot import create_bot, create_dispatcher
+from app.bot.bot import create_bot, create_dispatcher, set_bot_commands
 from app.bot.gateway import TelegramConfirmationGateway
 
 log = get_logger("main")
@@ -41,6 +41,7 @@ async def main() -> None:
     registry.set_confirmation_gateway(gateway)
 
     await registry.run_forever()
+    await set_bot_commands(bot)
     dp = create_dispatcher(registry=registry, memory=history)
 
     log.info("startup", model=settings.llm_model, agents=registry.available_agents())

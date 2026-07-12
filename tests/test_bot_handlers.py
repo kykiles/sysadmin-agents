@@ -64,8 +64,19 @@ def test_build_router_accepts_memory():
 
     class DummyMem:
         def __init__(self): self.cleared = False
-        def clear(self): self.cleared = True
+        def clear(self, chat_id): self.cleared = True
 
     reg = AgentRegistry()
     router = build_router(registry=reg, allowed_id=1, memory=DummyMem())
     assert router is not None
+    names = {h.callback.__name__ for h in router.message.handlers}
+    assert {"_start", "_help", "_reset", "_task"} <= names
+
+
+async def test_set_bot_commands_registers_menu():
+    from app.bot.bot import set_bot_commands
+    bot = MagicMock()
+    bot.set_my_commands = AsyncMock()
+    await set_bot_commands(bot)
+    (commands,), _ = bot.set_my_commands.call_args
+    assert [c.command for c in commands] == ["start", "help", "reset"]
