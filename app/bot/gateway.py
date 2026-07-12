@@ -3,6 +3,7 @@ from aiogram import Bot
 from app.agents.registry import ConfirmationGateway
 from app.agents.messages import ConfirmationRequest, Decision
 from app.bot.keyboards import approve_keyboard
+from app.bot.render import format_confirmation
 from app.config import settings
 
 
@@ -30,7 +31,7 @@ class TelegramConfirmationGateway(ConfirmationGateway):
             return Decision.AUTO_APPROVED
         fut = asyncio.get_running_loop().create_future()
         self._pending[req.task_id] = fut
-        text = f"Подтвердите опасное действие:\n{req.description}"
+        text = format_confirmation(req)
         await self._bot.send_message(
             self._chat_id, text, reply_markup=approve_keyboard(req.task_id, req.tool_name)
         )

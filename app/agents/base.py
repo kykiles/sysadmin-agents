@@ -69,6 +69,7 @@ class Agent:
                             tool_name=tool.name,
                             args=args,
                             description=f"{tool.name} {args}",
+                            reason=msg.content or "",
                         )
                         log.info("confirmation_required", agent=self.name, tool=tool.name, args=args)
                         decision = await self._registry.confirm(req)

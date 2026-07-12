@@ -26,3 +26,4 @@ class ConfirmationRequest(BaseModel):
     tool_name: str
     args: dict
     description: str
+    reason: str = ""
