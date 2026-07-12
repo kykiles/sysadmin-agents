@@ -172,6 +172,22 @@ async def shell_exec(command: list[str]) -> dict:
     return await _run_subprocess(command)
 
 
+# ---------- host access (via nsenter into pid 1 namespaces) ----------
+
+def _nsenter(argv: list[str]) -> list[str]:
+    return ["nsenter", "-t", "1", "-m", "-p", "--", *argv]
+
+
+async def host_exec(command: list[str]) -> dict:
+    """Run an argv command on the real host (mount/pid namespace of pid 1)."""
+    return await _run_subprocess(_nsenter(command))
+
+
+async def host_shell(script: str) -> dict:
+    """Run a shell pipeline on the real host via `bash -lc`."""
+    return await _run_subprocess(_nsenter(["bash", "-lc", script]))
+
+
 # ---------- compose (subprocess) ----------
 
 def _project_dir(project: str) -> str:

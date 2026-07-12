@@ -36,6 +36,19 @@ def test_deployadmin_agent_registered():
     assert "deploy_run" in {t.name for t in reg.get_agent("deployadmin").tools}
 
 
+def test_new_specialist_agents_registered():
+    skills = load_all_skills(SKILLS_DIR)
+    reg = AgentRegistry()
+    available = load_agents(DEFS_DIR, skills, FakeLLM(), reg)
+    for name, tool in [
+        ("observer", "observe_query"),
+        ("backupadmin", "backup_run"),
+        ("secadmin", "sec_query"),
+    ]:
+        assert name in available
+        assert tool in {t.name for t in reg.get_agent(name).tools}
+
+
 def test_load_agents_unknown_skill_raises(tmp_path):
     bad = tmp_path / "bad.md"
     bad.write_text("---\nname: bad\ndescription: x\nskills:\n  - nope\n---\nроль", encoding="utf-8")

@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     dialog_history_token_budget: int = Field(default=4000, alias="DIALOG_HISTORY_TOKEN_BUDGET")
     dialog_retention_days: int = Field(default=90, alias="DIALOG_RETENTION_DAYS")
     deploy_allowed: str = Field(default="", alias="DEPLOY_ALLOWED")
+    backup_allowed: str = Field(default="", alias="BACKUP_ALLOWED")
+    backup_dir: str = Field(default="/var/backups/sysadmin", alias="BACKUP_DIR")
+    backup_keep: int = Field(default=7, alias="BACKUP_KEEP")
 
 
 @lru_cache(maxsize=1)
