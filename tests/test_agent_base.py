@@ -155,10 +155,10 @@ class FakeMemory:
     def __init__(self):
         self.items = []
 
-    def load(self):
+    def load(self, chat_id):
         return list(self.items)
 
-    def append(self, role, content):
+    def append(self, chat_id, role, content):
         self.items.append({"role": role, "content": content})
 
 
@@ -177,8 +177,8 @@ async def test_agent_saves_final_turn_to_memory():
 
 async def test_agent_loads_history_into_prompt():
     mem = FakeMemory()
-    mem.append("user", "прошлый вопрос")
-    mem.append("assistant", "прошлый ответ")
+    mem.append("c1", "user", "прошлый вопрос")
+    mem.append("c1", "assistant", "прошлый ответ")
     final = ChoiceMessage(content="ок", tool_calls=None)
     llm = FakeLLM([final])
     reg = AgentRegistry()

@@ -16,12 +16,12 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
 
     @router.message(WhitelistFilter(allowed_id), Command("reset"))
     async def _reset(message: Message):
-        await asyncio.to_thread(memory.clear)
+        await asyncio.to_thread(memory.clear, str(message.chat.id))
         await message.answer("История диалога очищена.")
 
     @router.message(WhitelistFilter(allowed_id))
     async def _task(message: Message):
-        task = Task(content=message.text or "")
+        task = Task(content=message.text or "", chat_id=str(message.chat.id))
         result = await registry.request("director", task)
         await message.answer(result.content, parse_mode=None)
 

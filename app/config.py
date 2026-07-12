@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     audit_trail_path: str = Field(default="/data/audit.jsonl", alias="AUDIT_TRAIL_PATH")
     dialog_db_path: str = Field(default="/data/dialog.db", alias="DIALOG_DB_PATH")
     dialog_history_limit: int = Field(default=20, alias="DIALOG_HISTORY_LIMIT")
+    dialog_history_token_budget: int = Field(default=4000, alias="DIALOG_HISTORY_TOKEN_BUDGET")
     deploy_allowed: str = Field(default="", alias="DEPLOY_ALLOWED")
 
 

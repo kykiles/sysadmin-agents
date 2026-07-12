@@ -7,9 +7,9 @@ def _store(tmp_path, limit=20):
 
 def test_append_and_load_roundtrip(tmp_path):
     h = _store(tmp_path)
-    h.append("user", "привет")
-    h.append("assistant", "здравствуй")
-    assert h.load() == [
+    h.append("c1", "user", "привет")
+    h.append("c1", "assistant", "здравствуй")
+    assert h.load("c1") == [
         {"role": "user", "content": "привет"},
         {"role": "assistant", "content": "здравствуй"},
     ]
@@ -18,8 +18,8 @@ def test_append_and_load_roundtrip(tmp_path):
 def test_load_returns_last_n_in_chronological_order(tmp_path):
     h = _store(tmp_path, limit=2)
     for i in range(5):
-        h.append("user", f"m{i}")
-    assert h.load() == [
+        h.append("c1", "user", f"m{i}")
+    assert h.load("c1") == [
         {"role": "user", "content": "m3"},
         {"role": "user", "content": "m4"},
     ]
@@ -27,14 +27,42 @@ def test_load_returns_last_n_in_chronological_order(tmp_path):
 
 def test_clear_empties_history(tmp_path):
     h = _store(tmp_path)
-    h.append("user", "x")
-    h.clear()
-    assert h.load() == []
+    h.append("c1", "user", "x")
+    h.clear("c1")
+    assert h.load("c1") == []
 
 
 def test_persists_across_instances(tmp_path):
     path = str(tmp_path / "dialog.db")
-    DialogHistory(db_path=path, limit=20).append("user", "запомни")
-    assert DialogHistory(db_path=path, limit=20).load() == [
+    DialogHistory(db_path=path, limit=20).append("c1", "user", "запомни")
+    assert DialogHistory(db_path=path, limit=20).load("c1") == [
         {"role": "user", "content": "запомни"}
     ]
+
+
+def test_token_budget_truncates_oldest(tmp_path):
+    # бюджет ~15 токенов; каждое сообщение ~ len//4+4
+    h = DialogHistory(db_path=str(tmp_path / "dialog.db"), limit=100, token_budget=15)
+    for i in range(10):
+        h.append("c1", "user", "x" * 20)  # ~ 20//4+4 = 9 токенов each
+    loaded = h.load("c1")
+    # укладываются 1-2 последних сообщения, не все 10
+    assert 0 < len(loaded) < 10
+    assert loaded[-1]["content"] == "x" * 20
+
+
+def test_token_budget_keeps_at_least_one(tmp_path):
+    h = DialogHistory(db_path=str(tmp_path / "dialog.db"), limit=100, token_budget=1)
+    h.append("c1", "user", "y" * 400)
+    assert h.load("c1") == [{"role": "user", "content": "y" * 400}]
+
+
+def test_chat_ids_are_isolated(tmp_path):
+    h = _store(tmp_path)
+    h.append("c1", "user", "секрет-1")
+    h.append("c2", "user", "секрет-2")
+    assert h.load("c1") == [{"role": "user", "content": "секрет-1"}]
+    assert h.load("c2") == [{"role": "user", "content": "секрет-2"}]
+    h.clear("c1")
+    assert h.load("c1") == []
+    assert h.load("c2") == [{"role": "user", "content": "секрет-2"}]

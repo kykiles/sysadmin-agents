@@ -4,9 +4,10 @@ from pathlib import Path
 
 
 class DialogHistory:
-    def __init__(self, db_path: str, limit: int):
+    def __init__(self, db_path: str, limit: int, token_budget: int = 4000):
         self._path = db_path
         self._limit = limit
+        self._token_budget = token_budget
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -18,27 +19,39 @@ class DialogHistory:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS messages ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "chat_id TEXT NOT NULL DEFAULT '', "
                 "role TEXT NOT NULL, "
                 "content TEXT NOT NULL, "
                 "ts TEXT NOT NULL)"
             )
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+            if "chat_id" not in cols:
+                conn.execute("ALTER TABLE messages ADD COLUMN chat_id TEXT NOT NULL DEFAULT ''")
 
-    def append(self, role: str, content: str) -> None:
+    def append(self, chat_id: str, role: str, content: str) -> None:
         ts = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO messages (role, content, ts) VALUES (?, ?, ?)",
-                (role, content, ts),
+                "INSERT INTO messages (chat_id, role, content, ts) VALUES (?, ?, ?, ?)",
+                (chat_id, role, content, ts),
             )
 
-    def load(self) -> list[dict]:
+    def load(self, chat_id: str) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT role, content FROM messages ORDER BY id DESC LIMIT ?",
-                (self._limit,),
+                "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+                (chat_id, self._limit),
             ).fetchall()
-        return [{"role": r, "content": c} for r, c in reversed(rows)]
+        # rows идут от новых к старым; набираем, пока укладываемся в бюджет токенов
+        selected: list[dict] = []
+        used = 0
+        for role, content in rows:
+            used += len(content) // 4 + 4
+            if selected and used > self._token_budget:
+                break
+            selected.append({"role": role, "content": content})
+        return list(reversed(selected))
 
-    def clear(self) -> None:
+    def clear(self, chat_id: str) -> None:
         with self._connect() as conn:
-            conn.execute("DELETE FROM messages")
+            conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))

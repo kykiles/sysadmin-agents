@@ -32,7 +32,7 @@ class Agent:
         return next((t for t in self.tools if t.name == name), None)
 
     async def handle(self, task: Task) -> Result:
-        history = await asyncio.to_thread(self._memory.load) if self._memory else []
+        history = await asyncio.to_thread(self._memory.load, task.chat_id) if self._memory else []
         messages = [
             {"role": "system", "content": self.system_prompt},
             *history,
@@ -45,8 +45,8 @@ class Agent:
                 last_content = msg.content
             if not msg.tool_calls:
                 if self._memory:
-                    await asyncio.to_thread(self._memory.append, "user", task.content)
-                    await asyncio.to_thread(self._memory.append, "assistant", msg.content or "")
+                    await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
+                    await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", msg.content or "")
                 return Result(task_id=task.id, content=msg.content or "")
             messages.append({
                 "role": "assistant",
@@ -91,6 +91,6 @@ class Agent:
         note = f"достигнут лимит итераций ({limit}), ответ может быть неполным"
         content = f"{last_content}\n\n⚠️ {note}" if last_content else note
         if self._memory:
-            await asyncio.to_thread(self._memory.append, "user", task.content)
-            await asyncio.to_thread(self._memory.append, "assistant", content)
+            await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
+            await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
         return Result(task_id=task.id, content=content, success=False)

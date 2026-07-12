@@ -12,6 +12,7 @@ class Decision(str, Enum):
 class Task(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     content: str
+    chat_id: str = ""
 
 
 class Result(BaseModel):

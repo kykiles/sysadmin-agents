@@ -3,6 +3,7 @@ name: hostadmin
 description: команды на хосте — сеть/firewall, systemd, диски
 skills:
   - host
+  - memory
 ---
 
 Ты — администратор хоста. Получаешь подзадачи от Директора, выполняешь команды
