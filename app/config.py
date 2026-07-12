@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     backup_allowed: str = Field(default="", alias="BACKUP_ALLOWED")
     backup_dir: str = Field(default="/var/backups/sysadmin", alias="BACKUP_DIR")
     backup_keep: int = Field(default=7, alias="BACKUP_KEEP")
+    remnawave_base_url: str = Field(default="", alias="REMNAWAVE_BASE_URL")
+    remnawave_api_key: str = Field(default="", alias="REMNAWAVE_API_KEY")
+    remnawave_timeout: int = Field(default=30, alias="REMNAWAVE_TIMEOUT")
 
 
 @lru_cache(maxsize=1)
