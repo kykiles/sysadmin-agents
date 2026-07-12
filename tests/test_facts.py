@@ -45,6 +45,16 @@ def test_forget_removes_fact(tmp_path):
     assert s.recall() == []
 
 
+def test_forget_scope_removes_all_facts_of_scope(tmp_path):
+    s = _store(tmp_path)
+    s.remember("host-a", "k1", "v1")
+    s.remember("host-a", "k2", "v2")
+    s.remember("global", "k", "v")
+    removed = s.forget_scope("host-a")
+    assert removed == 2
+    assert s.recall() == [{"scope": "global", "key": "k", "value": "v"}]
+
+
 def test_persists_across_instances(tmp_path):
     path = str(tmp_path / "dialog.db")
     KnowledgeStore(db_path=path).remember("global", "k", "v")

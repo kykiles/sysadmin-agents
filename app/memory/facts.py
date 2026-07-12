@@ -53,6 +53,11 @@ class KnowledgeStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM facts WHERE scope = ? AND key = ?", (scope, key))
 
+    def forget_scope(self, scope: str) -> int:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM facts WHERE scope = ?", (scope,))
+            return cur.rowcount
+
 
 _store: KnowledgeStore | None = None
 

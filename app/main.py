@@ -31,6 +31,7 @@ async def main() -> None:
         db_path=settings.dialog_db_path,
         limit=settings.dialog_history_limit,
         token_budget=settings.dialog_history_token_budget,
+        retention_days=settings.dialog_retention_days,
     )
     director = Director(llm=llm, registry=registry, available_agents=available, memory=history)
     registry.register(director)

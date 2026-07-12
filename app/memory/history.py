@@ -1,13 +1,14 @@
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
 class DialogHistory:
-    def __init__(self, db_path: str, limit: int, token_budget: int = 4000):
+    def __init__(self, db_path: str, limit: int, token_budget: int = 4000, retention_days: int = 90):
         self._path = db_path
         self._limit = limit
         self._token_budget = token_budget
+        self._retention_days = retention_days
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -29,12 +30,15 @@ class DialogHistory:
                 conn.execute("ALTER TABLE messages ADD COLUMN chat_id TEXT NOT NULL DEFAULT ''")
 
     def append(self, chat_id: str, role: str, content: str) -> None:
-        ts = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO messages (chat_id, role, content, ts) VALUES (?, ?, ?, ?)",
-                (chat_id, role, content, ts),
+                (chat_id, role, content, now.isoformat()),
             )
+            if self._retention_days > 0:
+                cutoff = (now - timedelta(days=self._retention_days)).isoformat()
+                conn.execute("DELETE FROM messages WHERE ts < ?", (cutoff,))
 
     def load(self, chat_id: str) -> list[dict]:
         with self._connect() as conn:

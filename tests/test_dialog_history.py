@@ -1,3 +1,6 @@
+import sqlite3
+from datetime import datetime, timedelta, timezone
+
 from app.memory.history import DialogHistory
 
 
@@ -55,6 +58,32 @@ def test_token_budget_keeps_at_least_one(tmp_path):
     h = DialogHistory(db_path=str(tmp_path / "dialog.db"), limit=100, token_budget=1)
     h.append("c1", "user", "y" * 400)
     assert h.load("c1") == [{"role": "user", "content": "y" * 400}]
+
+
+def test_append_purges_entries_older_than_retention(tmp_path):
+    path = str(tmp_path / "dialog.db")
+    h = DialogHistory(db_path=path, limit=100, retention_days=30)
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO messages (chat_id, role, content, ts) VALUES (?, ?, ?, ?)",
+            ("c1", "user", "древнее", old_ts),
+        )
+    h.append("c1", "user", "свежее")
+    assert h.load("c1") == [{"role": "user", "content": "свежее"}]
+
+
+def test_retention_zero_keeps_everything(tmp_path):
+    path = str(tmp_path / "dialog.db")
+    h = DialogHistory(db_path=path, limit=100, retention_days=0)
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=999)).isoformat()
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO messages (chat_id, role, content, ts) VALUES (?, ?, ?, ?)",
+            ("c1", "user", "древнее", old_ts),
+        )
+    h.append("c1", "user", "свежее")
+    assert len(h.load("c1")) == 2
 
 
 def test_chat_ids_are_isolated(tmp_path):
