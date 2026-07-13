@@ -21,5 +21,5 @@ def format_confirmation(req: ConfirmationRequest) -> str:
     if reason:
         lines.append(html.escape(reason))
     command = html.escape(_format_command(req.tool_name, req.args))
-    lines.append(f"<blockquote>{command}</blockquote>")
+    lines.append(f"<blockquote expandable>{command}</blockquote>")
     return "\n\n".join(lines)

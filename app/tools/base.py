@@ -10,6 +10,20 @@ class Safety(str, Enum):
     DANGEROUS = "dangerous"
 
 
+# Служебный параметр, который агент обязан заполнить при вызове DANGEROUS-инструмента:
+# строгое пояснение для пользователя. Вырезается перед выполнением (см. agents/base.py).
+INTENT_FIELD = "_intent"
+_INTENT_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Обязательно. Одно строгое предложение по-русски для пользователя — "
+        "как краткий доклад руководителю: что именно ты сейчас сделаешь и зачем. "
+        "Без технического жаргона и без самой команды. "
+        "Пример: «Проверю список запланированных cron-задач на сервере.»"
+    ),
+}
+
+
 @dataclass
 class Tool:
     name: str
@@ -19,12 +33,23 @@ class Tool:
     safety: Safety = Safety.SAFE
 
     def schema(self) -> dict:
+        parameters = self.params_model.model_json_schema()
+        if self.safety is Safety.DANGEROUS:
+            parameters = dict(parameters)
+            parameters["properties"] = {
+                **parameters.get("properties", {}),
+                INTENT_FIELD: _INTENT_SCHEMA,
+            }
+            required = list(parameters.get("required", []))
+            if INTENT_FIELD not in required:
+                required.append(INTENT_FIELD)
+            parameters["required"] = required
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.params_model.model_json_schema(),
+                "parameters": parameters,
             },
         }
 

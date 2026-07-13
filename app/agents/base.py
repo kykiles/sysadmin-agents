@@ -3,7 +3,7 @@ import json
 from app import audit
 from app.config import settings
 from app.llm.client import LLMClient
-from app.tools.base import Tool, Safety
+from app.tools.base import Tool, Safety, INTENT_FIELD
 from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 from app.agents.registry import AgentRegistry
 from app.logging import get_logger
@@ -64,12 +64,13 @@ class Agent:
                 else:
                     args = json.loads(tc.function.arguments or "{}")
                     if tool.safety is Safety.DANGEROUS:
+                        intent = str(args.pop(INTENT_FIELD, "") or "").strip()
                         req = ConfirmationRequest(
                             task_id=task.id,
                             tool_name=tool.name,
                             args=args,
                             description=f"{tool.name} {args}",
-                            reason=msg.content or "",
+                            reason=intent or (msg.content or ""),
                         )
                         log.info("confirmation_required", agent=self.name, tool=tool.name, args=args)
                         decision = await self._registry.confirm(req)

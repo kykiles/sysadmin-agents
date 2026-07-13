@@ -11,7 +11,7 @@ def test_shell_command_rendered_in_blockquote():
     text = format_confirmation(req)
     assert "⚠️ <b>Требуется подтверждение</b>" in text
     assert "Освобождаю место — удаляю старые логи." in text
-    assert "<blockquote>rm -rf /var/log/old</blockquote>" in text
+    assert "<blockquote expandable>rm -rf /var/log/old</blockquote>" in text
 
 
 def test_reason_omitted_when_empty():
@@ -20,7 +20,7 @@ def test_reason_omitted_when_empty():
         args={"container": "bot"}, description="d",
     )
     text = format_confirmation(req)
-    assert "<blockquote>docker_restart container=bot</blockquote>" in text
+    assert "<blockquote expandable>docker_restart container=bot</blockquote>" in text
     # без reason — только заголовок и команда
     assert text.count("\n\n") == 1
 
