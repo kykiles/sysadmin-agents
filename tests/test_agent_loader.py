@@ -45,6 +45,7 @@ def test_new_specialist_agents_registered():
         ("backupadmin", "backup_run"),
         ("secadmin", "sec_query"),
         ("remnawave", "rw_action"),
+        ("tlsadmin", "tls_query"),
     ]:
         assert name in available
         assert tool in {t.name for t in reg.get_agent(name).tools}
