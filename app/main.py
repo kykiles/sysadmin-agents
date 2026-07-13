@@ -11,6 +11,8 @@ from app.memory.history import DialogHistory
 from app.memory.facts import init_store
 from app.bot.bot import create_bot, create_dispatcher, set_bot_commands
 from app.bot.gateway import TelegramConfirmationGateway
+from app.monitoring.state import MonitorState
+from app.monitoring.loop import health_loop, config_from_settings
 
 log = get_logger("main")
 
@@ -44,10 +46,20 @@ async def main() -> None:
     await set_bot_commands(bot)
     dp = create_dispatcher(registry=registry, memory=history)
 
-    log.info("startup", model=settings.llm_model, agents=registry.available_agents())
+    monitor_task: asyncio.Task | None = None
+    if settings.monitor_enabled:
+        state = MonitorState(settings.monitor_db_path)
+        monitor_task = asyncio.create_task(
+            health_loop(llm, bot, settings.telegram_user_id, state, config_from_settings())
+        )
+
+    log.info("startup", model=settings.llm_model, agents=registry.available_agents(),
+             monitor=settings.monitor_enabled)
     try:
         await dp.start_polling(bot)
     finally:
+        if monitor_task is not None:
+            monitor_task.cancel()
         await registry.stop()
         await bot.session.close()
         log.info("shutdown")

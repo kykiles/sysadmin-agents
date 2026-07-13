@@ -36,6 +36,17 @@ class Settings(BaseSettings):
     remnawave_api_key: str = Field(default="", alias="REMNAWAVE_API_KEY")
     remnawave_timeout: int = Field(default=30, alias="REMNAWAVE_TIMEOUT")
 
+    monitor_enabled: bool = Field(default=False, alias="MONITOR_ENABLED")
+    monitor_interval_seconds: int = Field(default=300, alias="MONITOR_INTERVAL_SECONDS")
+    monitor_db_path: str = Field(default="/data/monitoring.db", alias="MONITOR_DB_PATH")
+    monitor_containers: str = Field(default="", alias="MONITOR_CONTAINERS")
+    monitor_disk_pct: float = Field(default=90.0, alias="MONITOR_DISK_PCT")
+    monitor_mem_min_mb: int = Field(default=200, alias="MONITOR_MEM_MIN_MB")
+    monitor_load_per_cpu: float = Field(default=2.0, alias="MONITOR_LOAD_PER_CPU")
+    monitor_tls_endpoints: str = Field(default="", alias="MONITOR_TLS_ENDPOINTS")
+    monitor_tls_warn_days: int = Field(default=14, alias="MONITOR_TLS_WARN_DAYS")
+    monitor_tls_every_ticks: int = Field(default=12, alias="MONITOR_TLS_EVERY_TICKS")
+
 
 @lru_cache(maxsize=1)
 def _get_settings() -> Settings:
