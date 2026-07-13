@@ -73,7 +73,54 @@ async def test_run_script_injects_env_and_argv(monkeypatch):
     assert out["stdout"] == '{"ok":true}'
 
 
+async def test_rw_curl_read_rejects_mutation(monkeypatch):
+    curl = AsyncMock()
+    monkeypatch.setattr(rt, "_curl", curl)
+    out = await rt.rw_curl_read("POST", "/api/nodes")
+    assert "error" in out
+    curl.assert_not_called()
+
+
+async def test_rw_curl_write_rejects_get(monkeypatch):
+    curl = AsyncMock()
+    monkeypatch.setattr(rt, "_curl", curl)
+    out = await rt.rw_curl_write("GET", "/api/nodes")
+    assert "error" in out
+    curl.assert_not_called()
+
+
+async def test_curl_builds_scoped_argv(monkeypatch):
+    monkeypatch.setattr(rt, "settings", SimpleNamespace(
+        remnawave_base_url="https://p.example/", remnawave_api_key="secret", remnawave_timeout=30))
+    shell = AsyncMock(return_value={"returncode": 0})
+    monkeypatch.setattr(rt, "shell_exec", shell)
+
+    await rt.rw_curl_write("PATCH", "api/users/u", {"days": 30})
+
+    argv = shell.await_args.args[0]
+    assert argv[0] == "curl"
+    assert "-X" in argv and argv[argv.index("-X") + 1] == "PATCH"
+    assert "https://p.example/api/users/u" in argv
+    assert any("Bearer secret" in a for a in argv)
+    assert argv[-1] == '{"days": 30}'
+
+
+async def test_curl_read_no_body(monkeypatch):
+    monkeypatch.setattr(rt, "settings", SimpleNamespace(
+        remnawave_base_url="https://p.example", remnawave_api_key="secret", remnawave_timeout=30))
+    shell = AsyncMock(return_value={"returncode": 0})
+    monkeypatch.setattr(rt, "shell_exec", shell)
+
+    await rt.rw_curl_read("GET", "/api/nodes")
+
+    argv = shell.await_args.args[0]
+    assert "-d" not in argv
+    assert argv[-1] == "https://p.example/api/nodes"
+
+
 def test_build_tools_safety():
     by_name = {t.name: t for t in rt.build_tools()}
     assert by_name["rw_query"].safety is Safety.SAFE
     assert by_name["rw_action"].safety is Safety.DANGEROUS
+    assert by_name["rw_curl_read"].safety is Safety.SAFE
+    assert by_name["rw_curl_write"].safety is Safety.DANGEROUS
