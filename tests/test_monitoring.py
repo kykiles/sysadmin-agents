@@ -169,7 +169,7 @@ async def test_recovery_message(tmp_path, monkeypatch):
     state_holder["ok"] = True
     await run_tick(FakeLLM(), bot, 1, st, _cfg(), 1)  # fail->ok => recovered
     assert bot.sent[0].startswith("🔴")
-    assert bot.sent[1].startswith("✅ Восстановлено")
+    assert bot.sent[1].startswith("✅ <b>Восстановлено: disk</b>")
 
 
 async def test_healthy_first_run_is_silent(tmp_path, monkeypatch):

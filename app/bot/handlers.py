@@ -1,10 +1,11 @@
 import asyncio
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from app.agents.messages import Task, Decision
 from app.agents.registry import AgentRegistry
 from app.bot.filters import WhitelistFilter
+from app.bot.render import render_answer, split_message
 
 
 def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
@@ -16,15 +17,15 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
 
     @router.message(WhitelistFilter(allowed_id), Command("help"))
     async def _help(message: Message):
-        await message.answer(
+        await message.answer(render_answer(
             "Опишите задачу обычным текстом — Директор разберёт её и делегирует "
             "специалисту (Docker, БД, хост). Опасные операции требуют подтверждения.\n\n"
-            "Команды:\n"
-            "/start — проверить, что система активна\n"
-            "/help — эта справка\n"
-            "/reset — очистить историю диалога",
-            parse_mode=None,
-        )
+            "**Команды**\n"
+            "> /start — проверить, что система активна\n"
+            "> /help — эта справка\n"
+            "> /reset — очистить историю диалога\n\n"
+            "Нужен отчёт файлом — попросите «оформи отчёт»."
+        ))
 
     @router.message(WhitelistFilter(allowed_id), Command("reset"))
     async def _reset(message: Message):
@@ -35,7 +36,16 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
     async def _task(message: Message):
         task = Task(content=message.text or "", chat_id=str(message.chat.id))
         result = await registry.request("director", task)
-        await message.answer(result.content, parse_mode=None)
+        if result.attachment:
+            # подпись режем ДО рендера: обрезка готового HTML разорвала бы тег
+            caption = split_message(result.content, limit=700)[0]
+            await message.answer_document(
+                FSInputFile(result.attachment),
+                caption=render_answer(caption),
+            )
+            return
+        for part in split_message(result.content):
+            await message.answer(render_answer(part))
 
     @router.callback_query(F.data.startswith("cf:"))
     async def _confirm(callback: CallbackQuery):
@@ -50,11 +60,12 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
                 gw._resolve(task_id, Decision.APPROVED)
             else:
                 gw._resolve(task_id, Decision.REJECTED)
-        labels = {"yes": "Yes", "no": "No", "all": "Yes, and don't ask again"}
+        labels = {"yes": "Выполнить", "no": "Отмена", "all": "Выполнить всё без вопросов"}
         await callback.answer(labels.get(choice, choice))
+        # html_text сохраняет уже отрендеренную разметку исходного сообщения;
+        # callback.message.text отдал бы её плоским текстом и потерял бы оформление
         await callback.message.edit_text(
-            callback.message.text + f"\n\n> Решение: {labels.get(choice, choice)}",
-            parse_mode=None,
+            callback.message.html_text + f"\n\n<b>Решение:</b> {labels.get(choice, choice)}"
         )
 
     return router

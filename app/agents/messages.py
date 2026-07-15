@@ -21,6 +21,7 @@ class Result(BaseModel):
     success: bool = True
     trace: list[str] = Field(default_factory=list)
     iterations: int = 0
+    attachment: str = ""
 
 
 class ConfirmationRequest(BaseModel):

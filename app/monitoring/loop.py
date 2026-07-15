@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass, field
 
+from app.bot.render import render_answer
 from app.config import settings
 from app.logging import get_logger
 from app.monitoring.checks import (
@@ -67,9 +68,12 @@ async def run_tick(llm, bot, chat_id, state: MonitorState, cfg: MonitorConfig, t
         was_ok = prev.get(r.name, True)
         if was_ok and not r.ok:
             text = await triage(llm, r)
-            await bot.send_message(chat_id, "🔴 " + text)
+            await bot.send_message(chat_id, render_answer(f"🔴 **Сбой: {r.name}**\n\n{text}"))
         elif not was_ok and r.ok:
-            await bot.send_message(chat_id, f"✅ Восстановлено: {r.name} — {r.detail}")
+            await bot.send_message(
+                chat_id,
+                render_answer(f"✅ **Восстановлено: {r.name}**\n\n> {r.detail}"),
+            )
     state.save(results)
 
 
