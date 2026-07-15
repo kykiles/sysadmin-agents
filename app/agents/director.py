@@ -1,9 +1,14 @@
+import asyncio
+
 from pydantic import BaseModel, Field
 from app.agents.base import Agent
 from app.agents.messages import Task, Result
 from app.agents.registry import AgentRegistry
 from app.llm.client import LLMClient
+from app.logging import get_logger
 from app.tools.base import Tool, Safety
+
+log = get_logger("director")
 
 
 class DelegateToParams(BaseModel):
@@ -31,9 +36,12 @@ def build_director_prompt(available_agents: dict[str, str]) -> str:
 
 
 class Director(Agent):
-    def __init__(self, llm: LLMClient, registry: AgentRegistry, available_agents: dict[str, str], memory=None):
+    def __init__(self, llm: LLMClient, registry: AgentRegistry, available_agents: dict[str, str],
+                 memory=None, journal=None):
         async def _delegate(agent_name: str, task: str) -> dict:
             result = await registry.request(agent_name, Task(content=task))
+            self._sub_trace.extend(result.trace)
+            self._agents_used.append(agent_name)
             return {"agent": agent_name, "result": result.content, "success": result.success}
 
         delegate_tool = Tool(
@@ -51,3 +59,31 @@ class Director(Agent):
             registry=registry,
             memory=memory,
         )
+        self._journal = journal
+        self._sub_trace: list[str] = []
+        self._agents_used: list[str] = []
+
+    async def handle(self, task: Task) -> Result:
+        # Реестр отдаёт агенту задачи по одной (_consume), поэтому накопители на
+        # инстансе безопасны — параллельных handle у Директора не бывает.
+        self._sub_trace = []
+        self._agents_used = []
+        result = await super().handle(task)
+        if self._journal is not None:
+            await self._write_journal(task, result)
+        return result
+
+    async def _write_journal(self, task: Task, result: Result) -> None:
+        try:
+            await asyncio.to_thread(
+                self._journal.record,
+                task_id=task.id,
+                chat_id=task.chat_id,
+                intent=task.content,
+                agents=self._agents_used,
+                tool_seq=result.trace + self._sub_trace,
+                iterations=result.iterations,
+                success=result.success,
+            )
+        except Exception:
+            log.exception("journal_write_failed", task_id=task.id)

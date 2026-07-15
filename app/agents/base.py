@@ -39,7 +39,10 @@ class Agent:
             {"role": "user", "content": task.content},
         ]
         last_content = ""
+        trace: list[str] = []
+        iterations = 0
         for _ in range(settings.agent_max_iterations):
+            iterations += 1
             msg = await self._llm.chat(messages, [t.schema() for t in self.tools])
             if msg.content:
                 last_content = msg.content
@@ -47,7 +50,8 @@ class Agent:
                 if self._memory:
                     await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
                     await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", msg.content or "")
-                return Result(task_id=task.id, content=msg.content or "")
+                return Result(task_id=task.id, content=msg.content or "",
+                              trace=trace, iterations=iterations)
             messages.append({
                 "role": "assistant",
                 "content": msg.content,
@@ -58,6 +62,7 @@ class Agent:
                 ],
             })
             for tc in msg.tool_calls:
+                trace.append(tc.function.name)
                 tool = self._find_tool(tc.function.name)
                 if tool is None:
                     out = json.dumps({"error": f"unknown tool {tc.function.name}"})
@@ -95,4 +100,5 @@ class Agent:
         if self._memory:
             await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
             await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
-        return Result(task_id=task.id, content=content, success=False)
+        return Result(task_id=task.id, content=content, success=False,
+                      trace=trace, iterations=iterations)

@@ -19,6 +19,8 @@ class Result(BaseModel):
     task_id: str
     content: str
     success: bool = True
+    trace: list[str] = Field(default_factory=list)
+    iterations: int = 0
 
 
 class ConfirmationRequest(BaseModel):

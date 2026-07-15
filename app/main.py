@@ -9,6 +9,7 @@ from app.agents.loader import load_agents
 from app.skills.loader import load_all_skills
 from app.memory.history import DialogHistory
 from app.memory.facts import init_store
+from app.memory.journal import TaskJournal
 from app.bot.bot import create_bot, create_dispatcher, set_bot_commands
 from app.bot.gateway import TelegramConfirmationGateway
 from app.monitoring.state import MonitorState
@@ -35,7 +36,9 @@ async def main() -> None:
         token_budget=settings.dialog_history_token_budget,
         retention_days=settings.dialog_retention_days,
     )
-    director = Director(llm=llm, registry=registry, available_agents=available, memory=history)
+    journal = TaskJournal(settings.journal_db_path) if settings.journal_enabled else None
+    director = Director(llm=llm, registry=registry, available_agents=available,
+                        memory=history, journal=journal)
     registry.register(director)
 
     bot = create_bot()
