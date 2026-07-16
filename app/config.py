@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     compose_projects_dir: str = Field(default="/opt", alias="COMPOSE_PROJECTS_DIR")
     shell_timeout_seconds: int = Field(default=120, alias="SHELL_TIMEOUT_SECONDS")
-    agent_max_iterations: int = Field(default=10, alias="AGENT_MAX_ITERATIONS")
+    agent_max_iterations: int = Field(default=25, alias="AGENT_MAX_ITERATIONS")
     confirmation_timeout_seconds: int = Field(
         default=300, alias="CONFIRMATION_TIMEOUT_SECONDS"
     )

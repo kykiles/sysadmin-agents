@@ -36,8 +36,19 @@ def test_ip_show_vs_mutating():
 
 def test_unknown_binary_blocked():
     assert not _is_read_only(["rm", "-rf", "/"])
-    assert not _is_read_only(["bash", "-c", "echo hi"])
     assert not _is_read_only([])
+
+
+def test_sh_wrapper_readonly_allowed():
+    # обёртка sh -c с пайпом read-only команд и текстовым фильтром
+    assert _is_read_only(["sh", "-c", "df -h | grep -i /"])
+    assert _is_read_only(["bash", "-c", "ss -tlnp && free -m"])
+
+
+def test_sh_wrapper_mutating_blocked():
+    # хотя бы одна изменяющая команда внутри — весь скрипт не read-only
+    assert not _is_read_only(["sh", "-c", "df -h && systemctl restart docker"])
+    assert not _is_read_only(["bash", "-c", "rm -rf /tmp/x"])
 
 
 async def test_host_query_rejects_non_readonly():

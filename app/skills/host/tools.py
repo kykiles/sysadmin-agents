@@ -1,5 +1,6 @@
 from app.tools.base import Tool, Safety
 from app.tools.docker import shell_exec, ShellParams
+from app.skills.shellsafe import check_wrapped_readonly
 
 
 # Бинарники, которые не меняют состояние системы при любых аргументах.
@@ -29,6 +30,13 @@ _JOURNALCTL_MUTATING = {"--rotate", "--vacuum-size", "--vacuum-time", "--vacuum-
 
 
 def _is_read_only(command: list[str]) -> bool:
+    wrapped = check_wrapped_readonly(command, _is_simple_read_only)
+    if wrapped is not None:
+        return wrapped
+    return _is_simple_read_only(command)
+
+
+def _is_simple_read_only(command: list[str]) -> bool:
     if not command:
         return False
     binary, args = command[0], command[1:]
@@ -59,6 +67,6 @@ async def host_query(command: list[str]) -> dict:
 
 def build_tools() -> list[Tool]:
     return [
-        Tool("host_query", "Run a READ-ONLY host command (iptables -L/-S, df, du, ss, ip show, systemctl status, journalctl, free, uptime). Safe, auto-executed. For anything that changes state use shell_exec.", ShellParams, host_query, Safety.SAFE),
+        Tool("host_query", "Run a READ-ONLY host command (iptables -L/-S, df, du, ss, ip show, systemctl status, journalctl, free, uptime). May be wrapped in `sh -c '<pipeline>'` for pipes/grep/loops — still auto-executed if every command inside is read-only. Safe, auto-executed. For anything that changes state use shell_exec.", ShellParams, host_query, Safety.SAFE),
         Tool("shell_exec", "Run a shell command on the host system (DESTRUCTIVE). Requires user confirmation.", ShellParams, shell_exec, Safety.DANGEROUS),
     ]

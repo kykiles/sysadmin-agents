@@ -11,7 +11,7 @@ def test_settings_defaults(monkeypatch):
     s = Settings()
     assert s.llm_base_url == "https://api.deepseek.com"
     assert s.llm_model == "deepseek-chat"
-    assert s.agent_max_iterations == 10
+    assert s.agent_max_iterations == 25
     assert s.compose_projects_dir == "/opt"
 
 

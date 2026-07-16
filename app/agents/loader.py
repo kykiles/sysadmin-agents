@@ -6,8 +6,21 @@ from app.llm.client import LLMClient
 from app.skills.loader import Skill, parse_frontmatter
 
 
+# Общие правила эффективности для всех специалистов: число шагов ограничено, поэтому
+# независимые проверки надо объединять и не повторять уже выполненное.
+_EFFICIENCY_RULES = (
+    "Правила работы (важно — число шагов ограничено):\n"
+    "- Объединяй независимые проверки в один вызов: несколько read-only команд можно "
+    "выполнить разом через `sh -c 'A && B && C'` (пайпы, циклы, 2>/dev/null допустимы — "
+    "это остаётся без подтверждения, если все команды внутри read-only).\n"
+    "- Не повторяй команду, которую уже выполнял в этом диалоге: используй прошлый вывод.\n"
+    "- Если для задачи есть готовый агрегирующий инструмент (например tls_report) — "
+    "начни с него, а точечные команды оставь на доуточнение."
+)
+
+
 def _compose_prompt(role: str, skills: list[Skill]) -> str:
-    parts = [role.strip()]
+    parts = [role.strip(), _EFFICIENCY_RULES]
     for skill in skills:
         parts.append(skill.instructions)
     return "\n\n".join(parts)
