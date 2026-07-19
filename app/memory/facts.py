@@ -20,20 +20,25 @@ class KnowledgeStore:
                 "key TEXT NOT NULL, "
                 "value TEXT NOT NULL, "
                 "ts TEXT NOT NULL, "
+                "kind TEXT NOT NULL DEFAULT 'stable', "
                 "PRIMARY KEY (scope, key))"
             )
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(facts)").fetchall()}
+            if "kind" not in cols:
+                conn.execute("ALTER TABLE facts ADD COLUMN kind TEXT NOT NULL DEFAULT 'stable'")
 
-    def remember(self, scope: str, key: str, value: str) -> None:
+    def remember(self, scope: str, key: str, value: str, kind: str = "stable") -> None:
         ts = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO facts (scope, key, value, ts) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, ts = excluded.ts",
-                (scope, key, value, ts),
+                "INSERT INTO facts (scope, key, value, ts, kind) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(scope, key) DO UPDATE SET "
+                "value = excluded.value, ts = excluded.ts, kind = excluded.kind",
+                (scope, key, value, ts, kind),
             )
 
     def recall(self, scope: str | None = None, query: str | None = None) -> list[dict]:
-        sql = "SELECT scope, key, value FROM facts"
+        sql = "SELECT scope, key, value, kind FROM facts"
         conds: list[str] = []
         params: list[str] = []
         if scope is not None:
@@ -47,7 +52,19 @@ class KnowledgeStore:
         sql += " ORDER BY scope, key"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [{"scope": s, "key": k, "value": v} for s, k, v in rows]
+        return [{"scope": s, "key": k, "value": v, "kind": kind} for s, k, v, kind in rows]
+
+    def all_with_ts(self) -> list[dict]:
+        """Все факты вместе с меткой времени — для lint'а. Инструментам памяти `ts`
+        не отдаём: агенту он не нужен, а токены стоит беречь."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT scope, key, value, kind, ts FROM facts ORDER BY ts"
+            ).fetchall()
+        return [
+            {"scope": s, "key": k, "value": v, "kind": kind, "ts": ts}
+            for s, k, v, kind, ts in rows
+        ]
 
     def forget(self, scope: str, key: str) -> None:
         with self._connect() as conn:

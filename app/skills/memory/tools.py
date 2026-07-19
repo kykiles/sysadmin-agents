@@ -8,6 +8,11 @@ class RememberParams(BaseModel):
     scope: str = Field(description='"global" or a host identifier the fact belongs to')
     key: str = Field(description="short snake_case key, e.g. postgres_version")
     value: str = Field(description="the fact value")
+    kind: str = Field(
+        default="stable",
+        description='"stable" for topology, paths, decisions; "snapshot" for values that drift '
+                    "(versions, ports, sizes) — those are re-checked sooner",
+    )
 
 
 class RecallParams(BaseModel):
@@ -24,9 +29,9 @@ class ForgetScopeParams(BaseModel):
     scope: str = Field(description="scope (host) to wipe all facts for, e.g. a decommissioned server")
 
 
-async def remember_fact(scope: str, key: str, value: str) -> dict:
-    get_store().remember(scope, key, value)
-    return {"remembered": {"scope": scope, "key": key, "value": value}}
+async def remember_fact(scope: str, key: str, value: str, kind: str = "stable") -> dict:
+    get_store().remember(scope, key, value, kind)
+    return {"remembered": {"scope": scope, "key": key, "value": value, "kind": kind}}
 
 
 async def recall_facts(scope: str | None = None, query: str | None = None) -> dict:

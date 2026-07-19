@@ -8,8 +8,11 @@ from app.agents.director import Director
 from app.agents.loader import load_agents
 from app.skills.loader import load_all_skills
 from app.memory.history import DialogHistory
-from app.memory.facts import init_store
+from app.memory.facts import init_store, get_store
 from app.memory.journal import TaskJournal
+from app.learning.detector import CandidateStore
+from app.learning.lint import LintState
+from app.learning.review import LearningContext
 from app.bot.bot import create_bot, create_dispatcher, set_bot_commands
 from app.bot.gateway import TelegramConfirmationGateway
 from app.monitoring.state import MonitorState
@@ -37,6 +40,13 @@ async def main() -> None:
         retention_days=settings.dialog_retention_days,
     )
     journal = TaskJournal(settings.journal_db_path) if settings.journal_enabled else None
+    learning = LearningContext(
+        journal=journal,
+        facts=get_store(),
+        candidates=CandidateStore(settings.journal_db_path),
+        lint=LintState(settings.journal_db_path),
+        llm=llm,
+    ) if journal is not None else None
     director = Director(llm=llm, registry=registry, available_agents=available,
                         memory=history, journal=journal)
     registry.register(director)
@@ -47,13 +57,14 @@ async def main() -> None:
 
     await registry.run_forever()
     await set_bot_commands(bot)
-    dp = create_dispatcher(registry=registry, memory=history)
+    dp = create_dispatcher(registry=registry, memory=history, learning=learning)
 
     monitor_task: asyncio.Task | None = None
     if settings.monitor_enabled:
         state = MonitorState(settings.monitor_db_path)
         monitor_task = asyncio.create_task(
-            health_loop(llm, bot, settings.telegram_user_id, state, config_from_settings())
+            health_loop(llm, bot, settings.telegram_user_id, state,
+                        config_from_settings(), learning)
         )
 
     log.info("startup", model=settings.llm_model, agents=registry.available_agents(),

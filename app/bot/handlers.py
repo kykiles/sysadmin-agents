@@ -5,10 +5,12 @@ from aiogram.types import Message, CallbackQuery, FSInputFile
 from app.agents.messages import Task, Decision
 from app.agents.registry import AgentRegistry
 from app.bot.filters import WhitelistFilter
+from app.bot.keyboards import review_markup
 from app.bot.render import render_answer, split_message
+from app.learning.review import render_review, resolve_candidate, resolve_fact, run_review
 
 
-def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
+def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=None) -> Router:
     router = Router()
 
     @router.message(WhitelistFilter(allowed_id), Command("start"))
@@ -23,7 +25,8 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
             "**Команды**\n"
             "> /start — проверить, что система активна\n"
             "> /help — эта справка\n"
-            "> /reset — очистить историю диалога\n\n"
+            "> /reset — очистить историю диалога\n"
+            "> /learn — самопроверка: повторяющиеся задачи и устаревшие знания\n\n"
             "Нужен отчёт файлом — попросите «оформи отчёт»."
         ))
 
@@ -31,6 +34,35 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory) -> Router:
     async def _reset(message: Message):
         await asyncio.to_thread(memory.clear, str(message.chat.id))
         await message.answer("История диалога очищена.")
+
+    @router.message(WhitelistFilter(allowed_id), Command("learn"))
+    async def _learn(message: Message):
+        if learning is None:
+            await message.answer("Самопроверка выключена (нет журнала задач).")
+            return
+        outcome = await run_review(learning)
+        if outcome.is_empty:
+            await message.answer("Нечего предложить: повторов и устаревших фактов не нашёл.")
+            return
+        await message.answer(
+            render_answer(render_review(outcome)), reply_markup=review_markup(outcome)
+        )
+
+    @router.callback_query(F.data.startswith("lc:"))
+    async def _reject_candidate(callback: CallbackQuery):
+        _, sid, _choice = callback.data.split(":")
+        signature = resolve_candidate(learning.candidates, sid) if learning else None
+        if signature is not None:
+            learning.candidates.set_status(signature, "rejected")
+        await callback.answer("Больше не предложу" if signature else "Кандидат не найден")
+
+    @router.callback_query(F.data.startswith("lf:"))
+    async def _forget_fact(callback: CallbackQuery):
+        _, sid, _choice = callback.data.split(":")
+        found = resolve_fact(learning.facts, sid) if learning else None
+        if found is not None:
+            learning.facts.forget(*found)
+        await callback.answer("Факт забыт" if found else "Факт не найден")
 
     @router.message(WhitelistFilter(allowed_id))
     async def _task(message: Message):

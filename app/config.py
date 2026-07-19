@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     monitor_tls_warn_days: int = Field(default=14, alias="MONITOR_TLS_WARN_DAYS")
     monitor_tls_every_ticks: int = Field(default=12, alias="MONITOR_TLS_EVERY_TICKS")
 
+    learn_every_ticks: int = Field(default=0, alias="LEARN_EVERY_TICKS")
+    learn_window_hours: int = Field(default=168, alias="LEARN_WINDOW_HOURS")
+    learn_min_tasks: int = Field(default=3, alias="LEARN_MIN_TASKS")
+    learn_min_repeats: int = Field(default=2, alias="LEARN_MIN_REPEATS")
+    learn_min_steps: int = Field(default=2, alias="LEARN_MIN_STEPS")
+    lint_stale_stable_days: int = Field(default=90, alias="LINT_STALE_STABLE_DAYS")
+    lint_stale_snapshot_days: int = Field(default=14, alias="LINT_STALE_SNAPSHOT_DAYS")
+    lint_remind_days: int = Field(default=30, alias="LINT_REMIND_DAYS")
+    lint_max_items: int = Field(default=10, alias="LINT_MAX_ITEMS")
+
 
 @lru_cache(maxsize=1)
 def _get_settings() -> Settings:

@@ -18,14 +18,16 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="start", description="Проверить, что система активна"),
         BotCommand(command="help", description="Справка по возможностям"),
         BotCommand(command="reset", description="Очистить историю диалога"),
+        BotCommand(command="learn", description="Самопроверка: повторы и устаревшие знания"),
     ])
 
 
-def create_dispatcher(*, registry: AgentRegistry, memory) -> Dispatcher:
+def create_dispatcher(*, registry: AgentRegistry, memory, learning=None) -> Dispatcher:
     dp = Dispatcher()
     dp.include_router(build_router(
         registry=registry,
         allowed_id=settings.telegram_user_id,
         memory=memory,
+        learning=learning,
     ))
     return dp
