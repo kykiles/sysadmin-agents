@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     dialog_history_limit: int = Field(default=20, alias="DIALOG_HISTORY_LIMIT")
     dialog_history_token_budget: int = Field(default=4000, alias="DIALOG_HISTORY_TOKEN_BUDGET")
     dialog_retention_days: int = Field(default=90, alias="DIALOG_RETENTION_DAYS")
-    reports_dir: str = Field(default="/data/reports", alias="REPORTS_DIR")
+    # Отчёты — временные: файл живёт до отправки в Telegram, потом удаляется
+    # (см. handlers). Поэтому /tmp внутри контейнера, а не смонтированный /data.
+    reports_dir: str = Field(default="/tmp/reports", alias="REPORTS_DIR")
     journal_enabled: bool = Field(default=True, alias="JOURNAL_ENABLED")
     journal_db_path: str = Field(default="/data/tasks.db", alias="JOURNAL_DB_PATH")
     deploy_allowed: str = Field(default="", alias="DEPLOY_ALLOWED")

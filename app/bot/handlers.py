@@ -1,4 +1,6 @@
 import asyncio
+from pathlib import Path
+
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, FSInputFile
@@ -71,10 +73,14 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=N
         if result.attachment:
             # подпись режем ДО рендера: обрезка готового HTML разорвала бы тег
             caption = split_message(result.content, limit=700)[0]
-            await message.answer_document(
-                FSInputFile(result.attachment),
-                caption=render_answer(caption),
-            )
+            try:
+                await message.answer_document(
+                    FSInputFile(result.attachment),
+                    caption=render_answer(caption),
+                )
+            finally:
+                # отчёт нужен только для отправки — на сервере не копим
+                Path(result.attachment).unlink(missing_ok=True)
             return
         for part in split_message(result.content):
             await message.answer(render_answer(part))

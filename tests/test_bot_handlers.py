@@ -80,3 +80,26 @@ async def test_set_bot_commands_registers_menu():
     await set_bot_commands(bot)
     (commands,), _ = bot.set_my_commands.call_args
     assert [c.command for c in commands] == ["start", "help", "reset", "learn"]
+
+
+async def test_report_file_removed_after_send(tmp_path):
+    """Отчёт уходит в Telegram и не остаётся на диске."""
+    from app.bot.handlers import build_router
+    reg = AgentRegistry()
+    report = tmp_path / "r.md"
+    report.write_text("# отчёт", encoding="utf-8")
+    reg.request = AsyncMock(
+        return_value=Result(task_id="t", content="итог", attachment=str(report))
+    )
+
+    router = build_router(registry=reg, allowed_id=1, memory=MagicMock())
+    handler = [h.callback for h in router.message.handlers if h.callback.__name__ == "_task"][0]
+
+    msg = MagicMock()
+    msg.text = "сделай отчёт"
+    msg.chat.id = 1
+    msg.answer_document = AsyncMock()
+
+    await handler(msg)
+    assert msg.answer_document.await_count == 1
+    assert not report.exists()
