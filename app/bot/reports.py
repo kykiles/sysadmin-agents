@@ -17,5 +17,5 @@ def save_report(reports_dir: str, title: str, markdown: str) -> str:
     path = Path(reports_dir) / f"{_slug(title)}-{date}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     body = markdown if markdown.lstrip().startswith("#") else f"# {title}\n\n{markdown}"
-    path.write_text(body, encoding="utf-8")
+    path.write_text("\ufeff" + body, encoding="utf-8")
     return str(path)
