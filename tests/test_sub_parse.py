@@ -65,4 +65,19 @@ assert parse_link("vless://") is None or parse_link("vless://")["host"] == ""
 assert parse_link("не ссылка") is None
 print("ok  мусор")
 
+
+# render: секция «Вывод», сверка флага с ASN, кликабельный ASN
+from app.skills.subscription.analyze import render
+
+srv = [{"proto": "vless", "host": "a.example.com", "port": 443, "sec": "reality",
+        "net": "tcp", "tag": "🇫🇮 FI-1", "sni": "x", "fp": "", "pbk": "", "flow": "",
+        "path": "", "extra": {}}]
+md = render("t", None, srv, [], {"a.example.com": ["1.2.3.4"]},
+            {"1.2.3.4": {"as": "AS123 X", "countryCode": "RU", "country": "Russia", "org": "X"}})
+assert "## Вывод" in md
+assert "bgp.tools/as/123" in md, "ASN кликабельный"
+assert "Метка страны врёт" in md, "FI-метка на RU-ASN"
+assert "физически в России: 1" in md
+print("ok  render")
+
 print("\nвсе проверки пройдены")

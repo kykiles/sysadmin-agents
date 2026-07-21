@@ -6,11 +6,17 @@
 Перенесено из Claude Code skill `sub-report` — синхронный stdlib-код,
 вызывать через asyncio.to_thread.
 """
-import base64, json, re, socket, sys, urllib.parse, urllib.request
+import base64, json, os, re, socket, sys, urllib.parse, urllib.request, uuid
 from collections import Counter, defaultdict
 
-UAS = ["v2rayNG/1.8.5", "Happ/1.0", "Streisand", "clash-verge/1.5.0",
-       "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"]
+UAS = ["Hiddify/2.5.7", "v2rayNG/1.8.5", "Happ/1.0", "Streisand", "FoXray/1.5",
+       "clash-verge/1.5.0", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"]
+# Панели с HWID-гейтингом (Remnawave) без этих заголовков отдают заглушку.
+STUB = ("0.0.0.0", "не поддерживается", "not supported")
+# Отдельно: перебор UA тут не поможет и только жжёт лимит устройств.
+HWID_LIMIT = ("Лимит устройств", "device limit", "HWID")
+# HWID обязан быть стабильным между запусками: новый = +1 устройство к лимиту.
+HWID_FILE = os.getenv("SUB_HWID_FILE", "/data/hwid.txt")
 PROTOS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
 # Параметры, которые уже разложены по полям; остальное уходит в extra как есть.
 KNOWN_Q = {"encryption", "flow", "type", "security", "sni", "host", "peer", "fp",
@@ -32,20 +38,46 @@ def b64d(s):
 
 # --- fetch ------------------------------------------------------------------
 
-def fetch(url, hwid=None):
+def hwid():
+    """Стабильный ID устройства. Не переживёт перезапуск без тома — тогда
+    подписка увидит новое устройство."""
+    try:
+        if os.path.exists(HWID_FILE):
+            return open(HWID_FILE).read().strip()
+        v = uuid.uuid4().hex[:16]
+        os.makedirs(os.path.dirname(HWID_FILE), exist_ok=True)
+        open(HWID_FILE, "w").write(v)
+        return v
+    except OSError:
+        return uuid.uuid4().hex[:16]
+
+
+def fetch(url):
     """Перебирает User-Agent'ы, пока панель не отдаст непустое тело."""
-    last = ""
+    last, hw = "", hwid()
     for ua in UAS:
-        h = {"User-Agent": ua, "Accept": "*/*"}
-        if hwid:
-            h.update({"x-hwid": hwid, "x-device-os": "linux", "x-device-model": "PC"})
+        h = {"User-Agent": ua, "Accept": "*/*",
+             "x-hwid": hw, "x-device-os": "android", "x-ver-os": "14",
+             "x-device-model": "Pixel 7"}
         try:
             req = urllib.request.Request(url, headers=h)
             with urllib.request.urlopen(req, timeout=25) as r:
                 body = r.read().decode("utf-8", "replace").strip()
-            if body:
+            # base64-тела: маркеры заглушек видны только после декодирования
+            probe = body
+            try:
+                probe += urllib.parse.unquote(b64d(body).decode("utf-8", "replace"))
+            except Exception:
+                probe += urllib.parse.unquote(body)
+            if body and any(m in probe for m in HWID_LIMIT):
+                raise ValueError(
+                    "подписка отдаёт заглушку «лимит устройств»: HWID исчерпан. "
+                    f"Сбросьте устройства в панели или удалите {HWID_FILE}")
+            if body and not any(m in probe for m in STUB):
                 return body, ua
-            last = f"пустое тело на UA={ua}"
+            last = ("заглушка" if body else "пустое тело") + f" на UA={ua}"
+        except ValueError:
+            raise
         except Exception as e:
             last = f"{ua}: {e}"
     raise ValueError(f"не удалось скачать подписку ({last})")
@@ -173,6 +205,14 @@ def md_table(head, rows):
             + "".join("| " + " | ".join(str(c) for c in r) + " |\n" for r in rows))
 
 
+def as_link(as_str):
+    """'AS15169 Google LLC' -> кликабельная ссылка на карточку ASN."""
+    if not as_str:
+        return "—"
+    m = re.match(r"AS(\d+)", as_str)
+    return f"[{as_str}](https://bgp.tools/as/{m.group(1)})" if m else as_str
+
+
 def top(counter, n=25):
     return [(k or "—", v) for k, v in counter.most_common(n)]
 
@@ -182,72 +222,89 @@ def render(src, ua, servers, cfgs, ipmap, geomap):
     L.append(f"_Формат ответа: {'JSON-массив Xray-конфигов' if cfgs else 'список ссылок'}"
              + (f" · рабочий User-Agent: `{ua}`" if ua else "") + "_\n")
 
-    L += ["## Сводка", ""]
-    L.append(md_table(["Метрика", "Значение"], [
-        ("Уникальных серверов", len(servers)),
-        ("Уникальных хостов", len({s["host"] for s in servers})),
-        ("Профилей/конфигов", len(cfgs) or "—"),
-        ("Протоколы", ", ".join(f"{k} ({v})" for k, v in Counter(s["proto"] for s in servers).most_common())),
-        ("Транспорты", ", ".join(f"{k} ({v})" for k, v in Counter(s["net"] for s in servers).most_common())),
-        ("Безопасность", ", ".join(f"{k} ({v})" for k, v in Counter(s["sec"] for s in servers).most_common())),
-        ("Порты", ", ".join(f"{k} ({v})" for k, v in Counter(s["port"] for s in servers).most_common())),
-    ]))
+    # Хост, резолвящийся в кучу IP, — не выделенный сервер, а SNI-фронт/decoy
+    # (google.com и т.п.). Считать его машиной и хостингом = врать в статистике.
+    # ponytail: порог 2, реальные ноды дают 1 IP (иногда +IPv6). Поднять, если ловит своих.
+    decoy = {h for h, ips in ipmap.items() if len(ips) > 2}
+    real_ips = {ip for h, ips in ipmap.items() if h not in decoy for ip in ips}
 
-    # Названия узлов из подписки рядом с фактическим IP/ASN — сопоставление
-    # обещанного с реальным. Плюс проверка флага в названии против страны ASN.
     def asn_of(h):
         ips = ipmap.get(h) or []
         g = geomap.get(ips[0], {}) if ips else {}
-        return (ips[0] if ips else "—",
-                f"{g.get('as', '') or '?'}" + (f" ({g.get('countryCode')})" if g.get("countryCode") else ""),
-                g.get("countryCode"))
-
-    named = [s for s in servers if s.get("tag")]
-    if named:
-        L += ["", "## Названия узлов и реальная топология", ""]
-        rows, mismatch = [], []
-        for s in named:
-            ip, asn, cc = asn_of(s["host"])
-            claim = flag_cc(s["tag"])
-            warn = ""
-            if claim and cc and claim != cc:
-                warn, _ = " ⚠️", mismatch.append((s["tag"], claim, cc))
-            rows.append([s["tag"], s["proto"], s["host"], ip, asn + warn])
-        L.append(md_table(["Название в подписке", "Протокол", "Хост", "IP", "ASN"], rows))
-        if mismatch:
-            L += ["", "**Метка страны не совпадает с ASN:**", ""]
-            L += [f"- `{t}` — заявлено {c}, фактически {a}" for t, c, a in mismatch]
-            L.append("")
+        return (f"{len(ips)} IP (фронт)" if h in decoy else (ips[0] if ips else "—"),
+                as_link(g.get("as")), g.get("countryCode"),
+                g.get("country", "—"), g.get("org") or g.get("isp") or "—")
 
     # Один IP под несколькими именами: узлов в подписке больше, чем машин.
     byip = defaultdict(set)
     for h, ips in ipmap.items():
-        for ip in ips:
-            byip[ip].add(h)
+        if h not in decoy:
+            for ip in ips:
+                byip[ip].add(h)
     dup = {ip: hs for ip, hs in byip.items() if len(hs) > 1}
     nmach = len(byip) or len({s["host"] for s in servers})
+
+    # Единая таблица: название из подписки + фактическая топология.
+    rows, mismatch = [], []
+    for s in sorted(servers, key=lambda x: (not x.get("tag"), x.get("tag") or x["host"])):
+        ip, asn, cc, country, org = asn_of(s["host"])
+        claim = flag_cc(s.get("tag") or "")
+        warn = ""
+        if claim and cc and claim != cc and claim != "EU":
+            warn, _ = " ⚠️", mismatch.append((s.get("tag") or s["host"], claim, cc))
+        rows.append([s.get("tag") or "—", s["proto"], s["host"], ip, country, asn + warn, org])
+
+    hosters = Counter(geomap.get(ip, {}).get("as") or ""
+                      for ip in real_ips)
+
+    # --- Вывод: то, ради чего отчёт читают. Из уже посчитанных фактов.
+    facts = []
     if len(servers) > nmach:
-        L += ["", f"**Уникальных IP: {nmach} при {len(servers)} узлах в подписке.**", ""]
+        facts.append(f"**{len(servers)} узлов в подписке — на {nmach} реальных машинах.**")
+    if decoy:
+        facts.append("Узлы на " + ", ".join(f"`{h}`" for h in sorted(decoy))
+                     + " — маскировочный адрес, а не отдельный сервер.")
+    if mismatch:
+        facts.append(f"**Метка страны врёт у {len(mismatch)} узлов** — подробности ниже.")
+    sec = Counter(s["sec"] for s in servers)
+    facts.append("Шифрование: " + ", ".join(f"{k or 'нет'} ({v})" for k, v in sec.most_common()) + ".")
+    cc_cnt = Counter(geomap.get(ip, {}).get("countryCode") or "?" for ip in real_ips)
+    if cc_cnt:
+        facts.append("Реальная география: "
+                     + ", ".join(f"{k} ({v})" for k, v in cc_cnt.most_common()) + ".")
+    ru = [ip for ip in real_ips if geomap.get(ip, {}).get("countryCode") == "RU"]
+    if ru:
+        facts.append(f"⚠️ **Узлов физически в России: {len(ru)}** — трафик не покидает юрисдикцию.")
+    L += ["## Вывод", ""] + [f"- {f}" for f in facts] + [""]
+
+    L += ["## Сводка", ""]
+    L.append(md_table(["Метрика", "Значение"], [
+        ("Узлов в подписке", len(servers)),
+        ("Реальных машин", nmach),
+        ("Профилей/конфигов", len(cfgs) or "—"),
+        ("Протоколы", ", ".join(f"{k} ({v})" for k, v in Counter(s["proto"] for s in servers).most_common())),
+        ("Транспорты", ", ".join(f"{k} ({v})" for k, v in Counter(s["net"] for s in servers).most_common())),
+        ("Безопасность", ", ".join(f"{k} ({v})" for k, v in sec.most_common())),
+        ("Порты", ", ".join(f"{k} ({v})" for k, v in Counter(s["port"] for s in servers).most_common())),
+    ]))
+
+    L += ["", "## Узлы, IP и хостинг", ""]
+    L.append(md_table(["Название в подписке", "Протокол", "Хост", "IP",
+                       "Страна", "ASN", "Организация"], rows))
+    if mismatch:
+        L += ["", "**Метка страны не совпадает с ASN:**", ""]
+        L += [f"- `{t}` — заявлено {c}, фактически {a}" for t, c, a in mismatch]
+        L.append("")
     if dup:
         L += ["Один IP под несколькими именами:", ""]
         L += [f"- `{ip}` ← {', '.join(sorted(hs))}" for ip, hs in sorted(dup.items())]
         L.append("")
 
-    L += ["", "## Серверы, IP и хостинг", ""]
-    rows = []
-    for h in sorted({s["host"] for s in servers}):
-        for ip in (ipmap.get(h) or ["—"]):
-            g = geomap.get(ip, {})
-            rows.append([h, ip, g.get("country", "—"),
-                         (g.get("as") or "—")[:40], g.get("org") or g.get("isp") or "—",
-                         "да" if g.get("hosting") else ""])
-    L.append(md_table(["Хост", "IP", "Страна", "ASN", "Организация", "Хостинг"], rows))
-
-    hosters = Counter((geomap.get(ip, {}).get("as") or "неизвестно").split(" ", 1)[-1]
-                      for ips in ipmap.values() for ip in ips)
     if hosters:
         L += ["", "### Распределение по хостингам", "",
-              md_table(["Хостинг / ASN", "IP"], top(hosters))]
+              md_table(["Хостинг / ASN", "IP"],
+                       [(as_link(k) if k else "неизвестно", v) for k, v in hosters.most_common(25)]),
+              "_Маскировочные хосты не учтены._" if decoy else ""]
 
     for title, key in [("SNI / маскировочные домены", "sni"), ("Fingerprint (uTLS)", "fp"),
                        ("Reality public key", "pbk"), ("Flow", "flow"), ("Path", "path")]:
@@ -320,6 +377,8 @@ def render(src, ua, servers, cfgs, ipmap, geomap):
                     L.append("_Маршрутизация идентична во всех конфигах — остальные опущены._\n")
                     break
     return "\n".join(L) + "\n"
+
+
 
 
 # --- entrypoint -------------------------------------------------------------
