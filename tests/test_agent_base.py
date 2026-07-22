@@ -198,3 +198,34 @@ async def test_agent_without_memory_unchanged():
     agent = Agent(name="t", system_prompt="sys", tools=[], llm=llm, registry=reg)
     res = await agent.handle(Task(content="q"))
     assert res.content == "ответ"
+
+
+async def test_safe_tools_run_in_parallel():
+    import asyncio
+
+    running = 0
+    peak = 0
+
+    async def _slow(x: str) -> dict:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.05)
+        running -= 1
+        return {"got": x}
+
+    tool = Tool(name="slow", description="d", params_model=P, fn=_slow, safety=Safety.SAFE)
+    calls = ChoiceMessage(content=None, tool_calls=[
+        ToolCall(id=f"c{i}", function=ToolCallFunction(name="slow", arguments=json.dumps({"x": str(i)})))
+        for i in range(3)
+    ])
+    final = ChoiceMessage(content="done", tool_calls=None)
+    llm = FakeLLM([calls, final])
+    reg = AgentRegistry()
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm, registry=reg)
+    res = await agent.handle(Task(content="do"))
+    assert res.success is True
+    assert peak == 3
+    # порядок ответов совпадает с порядком tool_calls
+    tool_msgs = [m for m in llm.last_messages if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_msgs] == ["c0", "c1", "c2"]

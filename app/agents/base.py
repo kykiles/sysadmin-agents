@@ -31,6 +31,41 @@ class Agent:
     def _find_tool(self, name: str) -> Tool | None:
         return next((t for t in self.tools if t.name == name), None)
 
+    async def _run_safe(self, tc) -> str:
+        tool = self._find_tool(tc.function.name)
+        if tool is None:
+            out = json.dumps({"error": f"unknown tool {tc.function.name}"})
+        else:
+            out = await tool.execute(json.loads(tc.function.arguments or "{}"))
+        log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=str(out)[:200])
+        return out
+
+    async def _run_dangerous(self, task: Task, tc, tool: Tool, reason: str) -> str:
+        args = json.loads(tc.function.arguments or "{}")
+        intent = str(args.pop(INTENT_FIELD, "") or "").strip()
+        req = ConfirmationRequest(
+            task_id=task.id,
+            tool_name=tool.name,
+            args=args,
+            description=f"{tool.name} {args}",
+            reason=intent or reason,
+        )
+        log.info("confirmation_required", agent=self.name, tool=tool.name, args=args)
+        decision = await self._registry.confirm(req)
+        if decision is Decision.REJECTED:
+            out = json.dumps({"error": "rejected by user"})
+        else:
+            out = await tool.execute(args)
+        await audit.record(
+            agent=self.name,
+            tool=tool.name,
+            args=args,
+            decision=decision.value,
+            result=audit.outcome(out),
+        )
+        log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=str(out)[:200])
+        return out
+
     async def handle(self, task: Task) -> Result:
         history = await asyncio.to_thread(self._memory.load, task.chat_id) if self._memory else []
         messages = [
@@ -61,38 +96,36 @@ class Agent:
                     for tc in msg.tool_calls
                 ],
             })
-            for tc in msg.tool_calls:
+            # Безопасные вызовы идут пачкой параллельно (несколько delegate_to —
+            # это несколько специалистов одновременно), DANGEROUS — по одному,
+            # иначе подтверждения в Telegram столкнутся. Порядок ответов сохраняется.
+            outs: list[str] = [""] * len(msg.tool_calls)
+            batch: list[int] = []
+
+            async def flush() -> None:
+                if not batch:
+                    return
+                done = await asyncio.gather(
+                    *(self._run_safe(msg.tool_calls[i]) for i in batch),
+                    return_exceptions=True,
+                )
+                for i, out in zip(batch, done):
+                    if isinstance(out, BaseException):
+                        raise out
+                    outs[i] = out
+                batch.clear()
+
+            for i, tc in enumerate(msg.tool_calls):
                 trace.append(tc.function.name)
                 tool = self._find_tool(tc.function.name)
-                if tool is None:
-                    out = json.dumps({"error": f"unknown tool {tc.function.name}"})
+                if tool is not None and tool.safety is Safety.DANGEROUS:
+                    await flush()
+                    outs[i] = await self._run_dangerous(task, tc, tool, msg.content or "")
                 else:
-                    args = json.loads(tc.function.arguments or "{}")
-                    if tool.safety is Safety.DANGEROUS:
-                        intent = str(args.pop(INTENT_FIELD, "") or "").strip()
-                        req = ConfirmationRequest(
-                            task_id=task.id,
-                            tool_name=tool.name,
-                            args=args,
-                            description=f"{tool.name} {args}",
-                            reason=intent or (msg.content or ""),
-                        )
-                        log.info("confirmation_required", agent=self.name, tool=tool.name, args=args)
-                        decision = await self._registry.confirm(req)
-                        if decision is Decision.REJECTED:
-                            out = json.dumps({"error": "rejected by user"})
-                        else:
-                            out = await tool.execute(args)
-                        await audit.record(
-                            agent=self.name,
-                            tool=tool.name,
-                            args=args,
-                            decision=decision.value,
-                            result=audit.outcome(out),
-                        )
-                    else:
-                        out = await tool.execute(args)
-                log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=str(out)[:200])
+                    batch.append(i)
+            await flush()
+
+            for tc, out in zip(msg.tool_calls, outs):
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": out})
         limit = settings.agent_max_iterations
         note = f"достигнут лимит итераций ({limit}), ответ может быть неполным"
