@@ -76,8 +76,8 @@ md = render("t", None, srv, [], {"a.example.com": ["1.2.3.4"]},
             {"1.2.3.4": {"as": "AS123 X", "countryCode": "RU", "country": "Russia", "org": "X"}})
 assert "## Вывод" in md
 assert "bgp.tools/as/123" in md, "ASN кликабельный"
-assert "Метка страны врёт" in md, "FI-метка на RU-ASN"
-assert "физически в России: 1" in md
+assert "метка страны не совпадает" in md, "FI-метка на RU-ASN"
+assert "Точек входа в России: 1" in md
 print("ok  render")
 
 print("\nвсе проверки пройдены")

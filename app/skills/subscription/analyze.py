@@ -74,7 +74,12 @@ def fetch(url):
                     "подписка отдаёт заглушку «лимит устройств»: HWID исчерпан. "
                     f"Сбросьте устройства в панели или удалите {HWID_FILE}")
             if body and not any(m in probe for m in STUB):
-                return body, ua
+                # Тело может быть валидным, но чужого формата (sing-box под
+                # Hiddify) — тогда серверов из него не достать, идём к след. UA.
+                if to_servers(body)[0]:
+                    return body, ua
+                last = f"формат не разобран на UA={ua}"
+                continue
             last = ("заглушка" if body else "пустое тело") + f" на UA={ua}"
         except ValueError:
             raise
@@ -160,6 +165,19 @@ def parse_outbound(ob):
     return []
 
 
+def to_servers(body):
+    """Тело подписки -> (servers, xray_configs). Пустой список серверов =
+    формат не наш."""
+    links, cfgs = to_links(body)
+    servers = []
+    for c in cfgs:
+        for ob in c.get("outbounds") or []:
+            if ob.get("protocol") in ("vless", "vmess", "trojan", "shadowsocks"):
+                servers += parse_outbound(ob)
+    servers += [s for s in map(parse_link, links) if s and s["host"]]
+    return servers, cfgs
+
+
 # --- enrich -----------------------------------------------------------------
 
 def resolve(hosts):
@@ -205,6 +223,22 @@ def md_table(head, rows):
             + "".join("| " + " | ".join(str(c) for c in r) + " |\n" for r in rows))
 
 
+def hoster_sites(as_strs):
+    """{'AS15169 Google LLC', ...} -> {asn: website}. PeeringDB, без ключа."""
+    asns = {m.group(1) for s in as_strs if s for m in [re.match(r"AS(\d+)", s)] if m}
+    if not asns:
+        return {}
+    try:
+        req = urllib.request.Request(
+            "https://www.peeringdb.com/api/net?fields=asn,website&asn__in="
+            + ",".join(sorted(asns)), headers={"User-Agent": "curl/8"})
+        with urllib.request.urlopen(req, timeout=25) as r:
+            return {str(d["asn"]): d.get("website") or "" for d in json.load(r)["data"]}
+    except Exception as e:
+        print(f"warn: peeringdb недоступен: {e}", file=sys.stderr)
+        return {}
+
+
 def as_link(as_str):
     """'AS15169 Google LLC' -> кликабельная ссылка на карточку ASN."""
     if not as_str:
@@ -244,6 +278,14 @@ def render(src, ua, servers, cfgs, ipmap, geomap):
     dup = {ip: hs for ip, hs in byip.items() if len(hs) > 1}
     nmach = len(byip) or len({s["host"] for s in servers})
 
+    # Одна машина не может стоять в двух странах: если её входной IP обслуживает
+    # узлы с разными заявленными странами — это вход каскада, а не сам выход.
+    claims_by_ip = defaultdict(set)
+    for s in servers:
+        c, ips = flag_cc(s.get("tag") or ""), ipmap.get(s["host"]) or []
+        if c and ips:
+            claims_by_ip[ips[0]].add(c)
+
     # Единая таблица: название из подписки + фактическая топология.
     rows, mismatch = [], []
     for s in sorted(servers, key=lambda x: (not x.get("tag"), x.get("tag") or x["host"])):
@@ -251,7 +293,11 @@ def render(src, ua, servers, cfgs, ipmap, geomap):
         claim = flag_cc(s.get("tag") or "")
         warn = ""
         if claim and cc and claim != cc and claim != "EU":
-            warn, _ = " ⚠️", mismatch.append((s.get("tag") or s["host"], claim, cc))
+            ips = ipmap.get(s["host"]) or []
+            # Каскад: общий вход на несколько стран или вход за CDN-фронтом.
+            casc = s["host"] in decoy or len(claims_by_ip.get(ips[0] if ips else "", ())) > 1
+            warn = " (каскад)" if casc else " (≠)"
+            mismatch.append((s.get("tag") or s["host"], claim, cc, casc))
         rows.append([s.get("tag") or "—", s["proto"], s["host"], ip, country, asn + warn, org])
 
     hosters = Counter(geomap.get(ip, {}).get("as") or ""
@@ -265,7 +311,10 @@ def render(src, ua, servers, cfgs, ipmap, geomap):
         facts.append("Узлы на " + ", ".join(f"`{h}`" for h in sorted(decoy))
                      + " — маскировочный адрес, а не отдельный сервер.")
     if mismatch:
-        facts.append(f"**Метка страны врёт у {len(mismatch)} узлов** — подробности ниже.")
+        nc = sum(1 for *_, c in mismatch if c)
+        facts.append(
+            f"**У {len(mismatch)} узлов метка страны не совпадает с точкой входа**"
+            + (f" (из них {nc} с признаками каскада)" if nc else "") + ", см. ниже.")
     sec = Counter(s["sec"] for s in servers)
     facts.append("Шифрование: " + ", ".join(f"{k or 'нет'} ({v})" for k, v in sec.most_common()) + ".")
     cc_cnt = Counter(geomap.get(ip, {}).get("countryCode") or "?" for ip in real_ips)
@@ -274,7 +323,8 @@ def render(src, ua, servers, cfgs, ipmap, geomap):
                      + ", ".join(f"{k} ({v})" for k, v in cc_cnt.most_common()) + ".")
     ru = [ip for ip in real_ips if geomap.get(ip, {}).get("countryCode") == "RU"]
     if ru:
-        facts.append(f"⚠️ **Узлов физически в России: {len(ru)}** — трафик не покидает юрисдикцию.")
+        facts.append(f"**Точек входа в России: {len(ru)}** — на них трафик остаётся "
+                     "в юрисдикции, если за узлом нет каскада наружу.")
     L += ["## Вывод", ""] + [f"- {f}" for f in facts] + [""]
 
     L += ["## Сводка", ""]
@@ -292,8 +342,12 @@ def render(src, ua, servers, cfgs, ipmap, geomap):
     L.append(md_table(["Название в подписке", "Протокол", "Хост", "IP",
                        "Страна", "ASN", "Организация"], rows))
     if mismatch:
-        L += ["", "**Метка страны не совпадает с ASN:**", ""]
-        L += [f"- `{t}` — заявлено {c}, фактически {a}" for t, c, a in mismatch]
+        L += ["", "**Метка страны не совпадает с точкой входа:**", "",
+              "_Резолвится только вход. Пометка «каскад» — вход обслуживает несколько "
+              "заявленных стран или стоит за CDN-фронтом, значит выход находится "
+              "в другом месте и по этим данным не определяется._", ""]
+        L += [f"- `{t}` — заявлено {c}, вход в {a}" + (" (каскад)" if k else "")
+              for t, c, a, k in mismatch]
         L.append("")
     if dup:
         L += ["Один IP под несколькими именами:", ""]
@@ -301,10 +355,19 @@ def render(src, ua, servers, cfgs, ipmap, geomap):
         L.append("")
 
     if hosters:
+        sites = hoster_sites(hosters)  # пустой hosters при --no-net -> без запроса
+
+        def site_of(as_str):
+            m = re.match(r"AS(\d+)", as_str or "")
+            url = sites.get(m.group(1)) if m else None
+            return f"<{url}>" if url else "—"
+
         L += ["", "### Распределение по хостингам", "",
-              md_table(["Хостинг / ASN", "IP"],
-                       [(as_link(k) if k else "неизвестно", v) for k, v in hosters.most_common(25)]),
-              "_Маскировочные хосты не учтены._" if decoy else ""]
+              md_table(["Хостинг / ASN", "IP", "Сайт"],
+                       [(as_link(k) if k else "неизвестно", v, site_of(k))
+                        for k, v in hosters.most_common(25)]),
+              "_Маскировочные хосты не учтены. Сайты — PeeringDB._" if decoy
+              else "_Сайты — PeeringDB._"]
 
     for title, key in [("SNI / маскировочные домены", "sni"), ("Fingerprint (uTLS)", "fp"),
                        ("Reality public key", "pbk"), ("Flow", "flow"), ("Path", "path")]:
@@ -379,8 +442,6 @@ def render(src, ua, servers, cfgs, ipmap, geomap):
     return "\n".join(L) + "\n"
 
 
-
-
 # --- entrypoint -------------------------------------------------------------
 
 def report(source, no_net=False):
@@ -393,13 +454,7 @@ def report(source, no_net=False):
     else:
         body, src = source, "links"
 
-    links, cfgs = to_links(body)
-    servers = []
-    for c in cfgs:
-        for ob in c.get("outbounds") or []:
-            if ob.get("protocol") in ("vless", "vmess", "trojan", "shadowsocks"):
-                servers += parse_outbound(ob)
-    servers += [s for s in map(parse_link, links) if s and s["host"]]
+    servers, cfgs = to_servers(body)
     if not servers:
         raise ValueError("серверы не найдены — формат подписки не распознан")
 
