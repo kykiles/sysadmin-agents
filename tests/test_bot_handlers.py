@@ -79,7 +79,7 @@ async def test_set_bot_commands_registers_menu():
     bot.set_my_commands = AsyncMock()
     await set_bot_commands(bot)
     (commands,), _ = bot.set_my_commands.call_args
-    assert [c.command for c in commands] == ["start", "help", "reset", "learn"]
+    assert [c.command for c in commands] == ["start", "help", "reset", "learn", "reload"]
 
 
 async def test_report_file_removed_after_send(tmp_path):

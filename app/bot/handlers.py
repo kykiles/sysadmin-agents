@@ -12,7 +12,8 @@ from app.bot.render import render_answer, split_message
 from app.learning.review import render_review, resolve_candidate, resolve_fact, run_review
 
 
-def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=None) -> Router:
+def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=None,
+                 reload_library=None) -> Router:
     router = Router()
 
     @router.message(WhitelistFilter(allowed_id), Command("start"))
@@ -28,7 +29,8 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=N
             "> /start — проверить, что система активна\n"
             "> /help — эта справка\n"
             "> /reset — очистить историю диалога\n"
-            "> /learn — самопроверка: повторяющиеся задачи и устаревшие знания\n\n"
+            "> /learn — самопроверка: повторяющиеся задачи и устаревшие знания\n"
+            "> /reload — перечитать навыки и специалистов после загрузки новых\n\n"
             "Нужен отчёт файлом — попросите «оформи отчёт»."
         ))
 
@@ -36,6 +38,18 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=N
     async def _reset(message: Message):
         await asyncio.to_thread(memory.clear, str(message.chat.id))
         await message.answer("История диалога очищена.")
+
+    @router.message(WhitelistFilter(allowed_id), Command("reload"))
+    async def _reload(message: Message):
+        if reload_library is None:
+            await message.answer("Перезагрузка библиотеки недоступна.")
+            return
+        try:
+            summary = await asyncio.to_thread(reload_library)
+        except Exception as e:
+            await message.answer(f"Не перезагрузил: {e}")
+            return
+        await message.answer(f"Библиотека перечитана — {summary}.")
 
     @router.message(WhitelistFilter(allowed_id), Command("learn"))
     async def _learn(message: Message):

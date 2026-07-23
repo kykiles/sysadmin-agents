@@ -48,8 +48,17 @@ async def main() -> None:
         llm=llm,
     ) if journal is not None else None
     director = Director(llm=llm, registry=registry, available_agents=available,
-                        memory=history, journal=journal)
+                        memory=history, journal=journal, skills=skills)
     registry.register(director)
+
+    def reload_library() -> str:
+        """Перечитать skills/ и agents/defs/ без рестарта. Новые скиллы и агенты
+        подхватываются сразу; изменённый tools.py уже импортированного скилла — нет
+        (ponytail: importlib.reload, если понадобится править инструменты на живую)."""
+        new_skills = load_all_skills(app_dir / "skills")
+        new_agents = load_agents(app_dir / "agents" / "defs", new_skills, llm, registry)
+        director.reload_library(new_skills, new_agents)
+        return f"навыков: {len(new_skills)}, специалистов: {len(new_agents)}"
 
     bot = create_bot()
     gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)
@@ -57,7 +66,8 @@ async def main() -> None:
 
     await registry.run_forever()
     await set_bot_commands(bot)
-    dp = create_dispatcher(registry=registry, memory=history, learning=learning)
+    dp = create_dispatcher(registry=registry, memory=history, learning=learning,
+                           reload_library=reload_library)
 
     monitor_task: asyncio.Task | None = None
     if settings.monitor_enabled:

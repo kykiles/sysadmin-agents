@@ -16,11 +16,17 @@ class AgentRegistry:
         self._inboxes: dict[str, asyncio.Queue[Task]] = {}
         self._pending: dict[str, asyncio.Future[Result]] = {}
         self._gateway: ConfirmationGateway | None = None
-        self._tasks: list[asyncio.Task] = []
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._running = False
 
     def register(self, agent) -> None:
         self._agents[agent.name] = agent
-        self._inboxes[agent.name] = asyncio.Queue()
+        self._inboxes.setdefault(agent.name, asyncio.Queue())
+        # Агента можно зарегистрировать и на ходу (/reload): если реестр уже работает,
+        # поднимаем ему обработчик сразу. Перерегистрация имени обработчик не трогает —
+        # _consume берёт агента из реестра на каждой задаче.
+        if self._running and agent.name not in self._tasks:
+            self._tasks[agent.name] = asyncio.create_task(self._consume(agent.name))
 
     def set_confirmation_gateway(self, gw: ConfirmationGateway) -> None:
         self._gateway = gw
@@ -48,10 +54,10 @@ class AgentRegistry:
         return await self._gateway.request(req)
 
     async def _consume(self, name: str) -> None:
-        agent = self._agents[name]
         inbox = self._inboxes[name]
         while True:
             task = await inbox.get()
+            agent = self._agents[name]
             try:
                 result = await agent.handle(task)
             except Exception as e:
@@ -63,13 +69,15 @@ class AgentRegistry:
             await self.respond(result)
 
     async def run_forever(self) -> None:
+        self._running = True
         for name in self._agents:
-            self._tasks.append(asyncio.create_task(self._consume(name)))
+            self._tasks.setdefault(name, asyncio.create_task(self._consume(name)))
 
     async def stop(self) -> None:
-        for t in self._tasks:
+        self._running = False
+        for t in self._tasks.values():
             t.cancel()
-        for t in self._tasks:
+        for t in self._tasks.values():
             try:
                 await t
             except asyncio.CancelledError:

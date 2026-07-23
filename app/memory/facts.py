@@ -54,6 +54,15 @@ class KnowledgeStore:
             rows = conn.execute(sql, params).fetchall()
         return [{"scope": s, "key": k, "value": v, "kind": kind} for s, k, v, kind in rows]
 
+    def scopes(self) -> list[dict]:
+        """Оглавление памяти: области и сколько в каждой фактов. «Верхушка айсберга» —
+        по ней Директор решает, куда углубляться, не вычитывая факты целиком."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT scope, COUNT(*) FROM facts GROUP BY scope ORDER BY scope"
+            ).fetchall()
+        return [{"scope": s, "facts": n} for s, n in rows]
+
     def all_with_ts(self) -> list[dict]:
         """Все факты вместе с меткой времени — для lint'а. Инструментам памяти `ts`
         не отдаём: агенту он не нужен, а токены стоит беречь."""

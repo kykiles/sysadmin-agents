@@ -19,7 +19,7 @@ _EFFICIENCY_RULES = (
 )
 
 
-def _compose_prompt(role: str, skills: list[Skill]) -> str:
+def compose_prompt(role: str, skills: list[Skill]) -> str:
     parts = [role.strip(), _EFFICIENCY_RULES]
     for skill in skills:
         parts.append(skill.instructions)
@@ -43,7 +43,7 @@ def load_agents(
             chosen.append(skills[sn])
         agent = Agent(
             name=name,
-            system_prompt=_compose_prompt(role, chosen),
+            system_prompt=compose_prompt(role, chosen),
             tools=[t for s in chosen for t in s.tools],
             llm=llm,
             registry=registry,

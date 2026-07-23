@@ -25,14 +25,19 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
 
 def load_skill(skill_dir: Path) -> Skill:
     meta, body = parse_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
-    mod = importlib.import_module(f"app.skills.{skill_dir.name}.tools")
-    if not hasattr(mod, "build_tools"):
-        raise ValueError(f"skill {skill_dir.name}: tools.py должен определять build_tools()")
+    tools: list[Tool] = []
+    # tools.py необязателен: скилл может быть чистым плейбуком поверх инструментов
+    # других скиллов (например «как писать пост» поверх shell'а).
+    if (skill_dir / "tools.py").exists():
+        mod = importlib.import_module(f"app.skills.{skill_dir.name}.tools")
+        if not hasattr(mod, "build_tools"):
+            raise ValueError(f"skill {skill_dir.name}: tools.py должен определять build_tools()")
+        tools = mod.build_tools()
     return Skill(
         name=meta["name"],
         description=meta["description"],
         instructions=body.strip(),
-        tools=mod.build_tools(),
+        tools=tools,
     )
 
 
