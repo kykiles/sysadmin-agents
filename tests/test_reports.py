@@ -32,12 +32,12 @@ def test_save_report_creates_file_with_date(tmp_path):
 
 
 def test_save_report_adds_title_heading_when_missing(tmp_path):
-    body = Path(save_report(str(tmp_path), "Ноды", "текст")).read_text(encoding="utf-8")
+    body = Path(save_report(str(tmp_path), "Ноды", "текст")).read_text(encoding="utf-8-sig")
     assert body.startswith("# Ноды\n")
 
 
 def test_save_report_keeps_existing_heading(tmp_path):
-    body = Path(save_report(str(tmp_path), "Ноды", "# Свой заголовок\n\nтекст")).read_text(encoding="utf-8")
+    body = Path(save_report(str(tmp_path), "Ноды", "# Свой заголовок\n\nтекст")).read_text(encoding="utf-8-sig")
     assert body.startswith("# Свой заголовок")
     assert "# Ноды" not in body
 
