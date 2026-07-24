@@ -1,6 +1,6 @@
+import asyncio
 from dataclasses import dataclass
-from typing import Any
-from openai import AsyncOpenAI, NOT_GIVEN
+from openai import AsyncOpenAI, APIError, NOT_GIVEN
 
 
 @dataclass
@@ -29,11 +29,22 @@ class LLMClient:
     async def chat(
         self, messages: list[dict], tools: list[dict] | None = None
     ) -> ChoiceMessage:
-        resp = await self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            tools=tools if tools else NOT_GIVEN,
-        )
+        # Шлюз иногда заворачивает моргание апстрима в 400 "Upstream request
+        # failed" — не наша ошибка запроса, а транзиент. SDK такой 400 не
+        # ретраит, поэтому дожимаем сами.
+        # ponytail: 3 попытки, фикс-бэкофф; вынести в настройки если понадобится
+        for attempt in range(3):
+            try:
+                resp = await self._client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                    tools=tools if tools else NOT_GIVEN,
+                )
+                break
+            except APIError as e:
+                if attempt == 2 or "Upstream request failed" not in str(e):
+                    raise
+                await asyncio.sleep(1.5 * (attempt + 1))
         m = resp.choices[0].message
         tool_calls = None
         if m.tool_calls:
