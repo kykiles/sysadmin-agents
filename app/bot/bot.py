@@ -19,7 +19,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="help", description="Справка по возможностям"),
         BotCommand(command="reset", description="Очистить историю диалога"),
         BotCommand(command="learn", description="Самопроверка: повторы и устаревшие знания"),
-        BotCommand(command="reload", description="Перечитать навыки и специалистов"),
+        BotCommand(command="reload", description="Перечитать навыки"),
     ])
 
 
