@@ -108,10 +108,13 @@ class Director(Agent):
             if unknown:
                 return {"error": f"неизвестные навыки: {unknown}", "available": list(self._library)}
             chosen = [self._library[s] for s in skills]
+            # Навыки пересекаются по инструментам (docker+observe → docker_ps и др.),
+            # а шлюз на дубль имени в tools отвечает 400. Первый выигрывает.
+            uniq = {t.name: t for s in chosen for t in s.tools}
             sub = Agent(
                 name=f"spawned:{'+'.join(skills)}",
                 system_prompt=compose_prompt(role, chosen),
-                tools=[t for s in chosen for t in s.tools],
+                tools=list(uniq.values()),
                 llm=llm,
                 registry=registry,
             )

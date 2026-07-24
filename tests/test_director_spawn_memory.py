@@ -14,9 +14,11 @@ class FakeLLM:
     def __init__(self, responses):
         self._r = responses
         self.seen: list[list[dict]] = []
+        self.seen_tools: list[list[dict]] = []
 
     async def chat(self, messages, tools=None):
         self.seen.append(messages)
+        self.seen_tools.append(tools or [])
         return self._r.pop(0)
 
 
@@ -56,6 +58,24 @@ async def test_spawn_runs_temporary_agent(tmp_path):
     assert "echo" in d._sub_trace
     # У временного агента свой промпт из SKILL.md и никакой истории диалога.
     assert "## Навык: письмо" in llm.seen[1][0]["content"]
+
+
+async def test_spawn_dedupes_tools_shared_by_skills(tmp_path):
+    facts.init_store(str(tmp_path / "f.db"))
+    # Два навыка с одноимённым инструментом: шлюз на дубль имени отвечает 400.
+    lib = _skill()
+    lib["editor"] = Skill(name="editor", description="правит", instructions="## правка",
+                          tools=[Tool("echo", "echo back", EchoParams, _echo, Safety.SAFE)])
+    llm = FakeLLM([
+        _call("spawn", {"role": "х", "skills": ["writer", "editor"], "task": "t"}),
+        ChoiceMessage(content="готово", tool_calls=None),
+        ChoiceMessage(content="ок", tool_calls=None),
+    ])
+    d = Director(llm=llm, registry=AgentRegistry(), skills=lib)
+    await d.handle(Task(content="сделай"))
+
+    names = [t["function"]["name"] for t in llm.seen_tools[1]]
+    assert names == ["echo"]
 
 
 async def test_spawn_rejects_unknown_skill(tmp_path):
