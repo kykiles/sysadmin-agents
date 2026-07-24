@@ -16,11 +16,6 @@ from app.tools.base import Tool, Safety
 log = get_logger("director")
 
 
-class DelegateToParams(BaseModel):
-    agent_name: str = Field(description="name of the specialist agent to delegate to")
-    task: str = Field(description="clear, self-contained task description for the specialist")
-
-
 class SpawnParams(BaseModel):
     role: str = Field(description="one-line role for the temporary agent, in Russian")
     skills: list[str] = Field(description="names of skills to grant, from the available skills list")
@@ -32,24 +27,26 @@ class MakeReportParams(BaseModel):
     markdown: str = Field(description="full report body in markdown; tables and headings are fine here")
 
 
-def build_director_prompt(available_agents: dict[str, str], available_skills: dict[str, str] | None = None) -> str:
-    agents = "\n".join(f"- {name}: {desc}" for name, desc in available_agents.items())
+def build_director_prompt(available_skills: dict[str, str] | None = None) -> str:
     spawn_block = ""
     if available_skills:
         skills = "\n".join(f"- {name}: {desc}" for name, desc in available_skills.items())
         spawn_block = (
-            "\n\nЕсли готовый специалист не подходит (нужна другая комбинация навыков) — "
-            "собери временного агента через spawn: укажи роль одной фразой, набор навыков "
-            "и задачу. Агент живёт одну задачу, его контекст стирается после ответа. "
-            "Несколько spawn/delegate_to в одном ответе выполняются параллельно.\n"
+            "\n\nЗаранее заданных специалистов нет — под каждую задачу ты собираешь временных "
+            "агентов через spawn: укажи роль одной фразой, набор навыков и задачу. Агент живёт "
+            "одну задачу, его контекст стирается после ответа. Несколько spawn в одном ответе "
+            "выполняются параллельно. Последовательность «A и B параллельно → C сводит их "
+            "результаты» строится тобой: два spawn параллельно, третьим spawn передай их выводы "
+            "в task — межагентного обмена сообщениями нет, шина — это ты.\n"
             f"Доступные навыки:\n{skills}"
         )
     return (
         "Ты — Директор команды системных администраторов. Получаешь задачи от пользователя "
-        "через Telegram. Твоя роль: понять задачу, при необходимости разбить её и делегировать "
-        "подходящему специалисту через инструмент delegate_to. У тебя НЕТ прямого доступа к Docker. "
-        "Получив результат от специалиста, сформулируй понятный итоговый отчёт для пользователя на русском. "
-        "Если задача тривиальная и не требует специалиста — ответь сразу.\n\n"
+        "через Telegram. Твоя роль: понять задачу, при необходимости разбить её и поручить "
+        "выполнение временным агентам, которых ты собираешь под задачу через spawn. У тебя НЕТ "
+        "прямого доступа к Docker и командам сервера — всю работу делают спавнутые агенты. "
+        "Получив результат от агента, сформулируй понятный итоговый отчёт для пользователя на русском. "
+        "Если задача тривиальная и не требует агента — ответь сразу.\n\n"
         "Формат ответа:\n"
         "- Первая строка — итог одной фразой. Детали ниже.\n"
         "- Детали оформляй блоком цитаты: каждая строка начинается с «> ». "
@@ -67,9 +64,18 @@ def build_director_prompt(available_agents: dict[str, str], available_skills: di
         "в каждой. Сами факты не вычитывай целиком: если область относится к задаче, "
         "вызови recall_facts(scope=...). Итог задачи, который пригодится в будущем "
         "(решение, топология, путь, договорённость) — сохрани через remember_fact.\n\n"
-        f"Доступные специалисты:\n{agents}"
         f"{spawn_block}"
     )
+
+
+# Память — зона ответственности только директора: эти навыки не раздаём спавнутым
+# агентам. Свои инструменты памяти директор берёт из memory_tools() напрямую, не из
+# библиотеки, поэтому фильтрация библиотеки его не затрагивает.
+_DIRECTOR_ONLY = {"memory"}
+
+
+def _spawnable(skills: dict) -> dict:
+    return {n: s for n, s in skills.items() if n not in _DIRECTOR_ONLY}
 
 
 def _memory_index() -> str:
@@ -85,14 +91,8 @@ def _memory_index() -> str:
 
 
 class Director(Agent):
-    def __init__(self, llm: LLMClient, registry: AgentRegistry, available_agents: dict[str, str],
+    def __init__(self, llm: LLMClient, registry: AgentRegistry,
                  memory=None, journal=None, skills: dict | None = None):
-        async def _delegate(agent_name: str, task: str) -> dict:
-            result = await registry.request(agent_name, Task(content=task))
-            self._sub_trace.extend(result.trace)
-            self._agents_used.append(agent_name)
-            return {"agent": agent_name, "result": result.content, "success": result.success}
-
         async def _make_report(title: str, markdown: str) -> dict:
             path = await asyncio.to_thread(
                 save_report, settings.reports_dir, title, markdown
@@ -100,7 +100,7 @@ class Director(Agent):
             self._report_path = path
             return {"saved": path, "note": "файл будет отправлен пользователю"}
 
-        library = skills or {}
+        library = _spawnable(skills or {})
 
         async def _spawn(role: str, skills: list[str], task: str) -> dict:
             # библиотеку читаем с инстанса — /reload подменяет её на ходу
@@ -123,13 +123,6 @@ class Director(Agent):
             self._agents_used.append(sub.name)
             return {"agent": sub.name, "result": result.content, "success": result.success}
 
-        delegate_tool = Tool(
-            name="delegate_to",
-            description="Delegate a task to a specialist agent and receive its result",
-            params_model=DelegateToParams,
-            fn=_delegate,
-            safety=Safety.SAFE,
-        )
         report_tool = Tool(
             name="make_report",
             description=(
@@ -153,13 +146,13 @@ class Director(Agent):
         # Инструменты памяти берём из skill'а memory — те же, что у специалистов;
         # Директору нужны только чтение и запись, забывать факты — не его дело.
         mem_tools = [t for t in memory_tools() if t.name in ("recall_facts", "remember_fact")]
-        tools = [delegate_tool, report_tool, *mem_tools]
+        tools = [report_tool, *mem_tools]
         if library:
             tools.append(spawn_tool)
         super().__init__(
             name="director",
             system_prompt=build_director_prompt(
-                available_agents, {n: s.description for n, s in library.items()}
+                {n: s.description for n, s in library.items()}
             ),
             tools=tools,
             llm=llm,
@@ -173,11 +166,11 @@ class Director(Agent):
         self._agents_used: list[str] = []
         self._report_path: str = ""
 
-    def reload_library(self, skills: dict, available_agents: dict[str, str]) -> None:
-        """Подхватить обновлённые навыки и специалистов без рестарта процесса."""
-        self._library = skills
+    def reload_library(self, skills: dict) -> None:
+        """Подхватить обновлённые навыки без рестарта процесса."""
+        self._library = _spawnable(skills)
         self._base_prompt = build_director_prompt(
-            available_agents, {n: s.description for n, s in skills.items()}
+            {n: s.description for n, s in self._library.items()}
         )
 
     async def handle(self, task: Task) -> Result:

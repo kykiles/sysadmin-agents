@@ -1,6 +1,6 @@
 import json
 
-from app.agents.director import Director, _memory_index
+from app.agents.director import Director, _memory_index, _spawnable
 from app.agents.registry import AgentRegistry
 from app.agents.messages import Task
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
@@ -48,7 +48,7 @@ async def test_spawn_runs_temporary_agent(tmp_path):
         ChoiceMessage(content="готово", tool_calls=None),
         ChoiceMessage(content="Пост готов.", tool_calls=None),
     ])
-    d = Director(llm=llm, registry=AgentRegistry(), available_agents={}, skills=_skill())
+    d = Director(llm=llm, registry=AgentRegistry(), skills=_skill())
     res = await d.handle(Task(content="сделай пост"))
 
     assert res.content == "Пост готов."
@@ -64,11 +64,31 @@ async def test_spawn_rejects_unknown_skill(tmp_path):
         _call("spawn", {"role": "х", "skills": ["нетакого"], "task": "t"}),
         ChoiceMessage(content="навыка нет", tool_calls=None),
     ])
-    d = Director(llm=llm, registry=AgentRegistry(), available_agents={}, skills=_skill())
+    d = Director(llm=llm, registry=AgentRegistry(), skills=_skill())
     await d.handle(Task(content="сделай"))
 
     tool_reply = json.loads(llm.seen[1][-1]["content"])
     assert "нетакого" in tool_reply["error"]
+    assert d._agents_used == []
+
+
+async def test_memory_skill_is_not_spawnable(tmp_path):
+    facts.init_store(str(tmp_path / "f.db"))
+    lib = _skill()
+    lib["memory"] = Skill(name="memory", description="память", instructions="## память", tools=[])
+    # память есть в библиотеке, но директор не должен раздавать её спавнутым агентам
+    assert "memory" not in _spawnable(lib)
+
+    llm = FakeLLM([
+        _call("spawn", {"role": "х", "skills": ["memory"], "task": "запомни"}),
+        ChoiceMessage(content="памяти у агентов нет", tool_calls=None),
+    ])
+    d = Director(llm=llm, registry=AgentRegistry(), skills=lib)
+    await d.handle(Task(content="сделай"))
+
+    tool_reply = json.loads(llm.seen[1][-1]["content"])
+    assert "memory" in tool_reply["error"]
+    assert "memory" not in tool_reply["available"]
     assert d._agents_used == []
 
 

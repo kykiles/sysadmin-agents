@@ -5,7 +5,6 @@ from app.logging import setup_logging, get_logger
 from app.llm.client import LLMClient
 from app.agents.registry import AgentRegistry
 from app.agents.director import Director
-from app.agents.loader import load_agents
 from app.skills.loader import load_all_skills
 from app.memory.history import DialogHistory
 from app.memory.facts import init_store, get_store
@@ -32,7 +31,6 @@ async def main() -> None:
     app_dir = Path(__file__).parent
     init_store(settings.dialog_db_path)
     skills = load_all_skills(app_dir / "skills")
-    available = load_agents(app_dir / "agents" / "defs", skills, llm, registry)
     history = DialogHistory(
         db_path=settings.dialog_db_path,
         limit=settings.dialog_history_limit,
@@ -47,18 +45,17 @@ async def main() -> None:
         lint=LintState(settings.journal_db_path),
         llm=llm,
     ) if journal is not None else None
-    director = Director(llm=llm, registry=registry, available_agents=available,
+    director = Director(llm=llm, registry=registry,
                         memory=history, journal=journal, skills=skills)
     registry.register(director)
 
     def reload_library() -> str:
-        """Перечитать skills/ и agents/defs/ без рестарта. Новые скиллы и агенты
-        подхватываются сразу; изменённый tools.py уже импортированного скилла — нет
+        """Перечитать skills/ без рестарта. Новые скиллы подхватываются сразу;
+        изменённый tools.py уже импортированного скилла — нет
         (ponytail: importlib.reload, если понадобится править инструменты на живую)."""
         new_skills = load_all_skills(app_dir / "skills")
-        new_agents = load_agents(app_dir / "agents" / "defs", new_skills, llm, registry)
-        director.reload_library(new_skills, new_agents)
-        return f"навыков: {len(new_skills)}, специалистов: {len(new_agents)}"
+        director.reload_library(new_skills)
+        return f"навыков: {len(new_skills)}"
 
     bot = create_bot()
     gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)
