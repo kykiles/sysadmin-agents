@@ -82,6 +82,28 @@ async def test_set_bot_commands_registers_menu():
     assert [c.command for c in commands] == ["start", "help", "reset", "learn", "reload"]
 
 
+async def test_voice_message_goes_to_director_as_text(monkeypatch):
+    """Голосовое расшифровывается и уходит директору обычным текстом."""
+    from app.bot import voice
+    from app.bot.handlers import build_router
+
+    monkeypatch.setattr(voice, "transcribe_voice", AsyncMock(return_value="перезапусти nginx"))
+    reg = AgentRegistry()
+    reg.request = AsyncMock(return_value=Result(task_id="t", content="готово"))
+
+    router = build_router(registry=reg, allowed_id=1, memory=MagicMock())
+    handler = [h.callback for h in router.message.handlers if h.callback.__name__ == "_task"][0]
+
+    msg = MagicMock()
+    msg.text = None
+    msg.chat.id = 1
+    msg.answer = AsyncMock()
+
+    await handler(msg)
+    (_, task), _ = reg.request.await_args
+    assert task.content == "перезапусти nginx"
+
+
 async def test_report_file_removed_after_send(tmp_path):
     """Отчёт уходит в Telegram и не остаётся на диске."""
     from app.bot.handlers import build_router

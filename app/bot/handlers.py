@@ -25,7 +25,8 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=N
         await message.answer(render_answer(
             "Опишите задачу обычным текстом — Директор разберёт её и под задачу "
             "соберёт временных агентов из навыков (Docker, БД, хост). "
-            "Опасные операции требуют подтверждения.\n\n"
+            "Опасные операции требуют подтверждения. "
+            "Голосовое сообщение работает так же — распознаётся локально в текст.\n\n"
             "**Команды**\n"
             "> /start — проверить, что система активна\n"
             "> /help — эта справка\n"
@@ -83,7 +84,20 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=N
 
     @router.message(WhitelistFilter(allowed_id))
     async def _task(message: Message):
-        task = Task(content=message.text or "", chat_id=str(message.chat.id))
+        content = message.text or ""
+        if not content and (message.voice or message.audio):
+            from app.bot.voice import transcribe_voice
+            try:
+                content = await transcribe_voice(message)
+            except Exception as e:
+                await message.answer(f"Не расшифровал голосовое: {e}")
+                return
+            if not content:
+                await message.answer("Не расслышал — запишите ещё раз.")
+                return
+            # эхо расшифровки: канал шумный, пользователь должен видеть, что понято
+            await message.answer(render_answer(f"> {content}"))
+        task = Task(content=content, chat_id=str(message.chat.id))
         result = await registry.request("director", task)
         if result.attachment:
             # подпись режем ДО рендера: обрезка готового HTML разорвала бы тег
