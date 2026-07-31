@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from app import audit
 from app.config import settings
 from app.llm.client import LLMClient
@@ -9,6 +10,18 @@ from app.agents.registry import AgentRegistry
 from app.logging import get_logger
 
 log = get_logger("agent")
+
+# LLM часто отдаёт в аргументах сырые \d, \s из regex или \ из путей — JSON такое
+# не принимает. Экранируем всё, что не является валидным JSON-escape.
+_BAD_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu]|u[0-9a-fA-F]{4})')
+
+
+def parse_args(raw: str | None) -> dict:
+    raw = raw or "{}"
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return json.loads(_BAD_ESCAPE.sub(r"\\\\", raw))
 
 
 class Agent:
@@ -36,12 +49,20 @@ class Agent:
         if tool is None:
             out = json.dumps({"error": f"unknown tool {tc.function.name}"})
         else:
-            out = await tool.execute(json.loads(tc.function.arguments or "{}"))
+            try:
+                args = parse_args(tc.function.arguments)
+            except json.JSONDecodeError as e:
+                out = json.dumps({"error": f"invalid tool arguments: {e}"})
+            else:
+                out = await tool.execute(args)
         log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=str(out)[:200])
         return out
 
     async def _run_dangerous(self, task: Task, tc, tool: Tool, reason: str) -> str:
-        args = json.loads(tc.function.arguments or "{}")
+        try:
+            args = parse_args(tc.function.arguments)
+        except json.JSONDecodeError as e:
+            return json.dumps({"error": f"invalid tool arguments: {e}"})
         intent = str(args.pop(INTENT_FIELD, "") or "").strip()
         req = ConfirmationRequest(
             task_id=task.id,

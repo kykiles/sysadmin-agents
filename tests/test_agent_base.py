@@ -229,3 +229,29 @@ async def test_safe_tools_run_in_parallel():
     # порядок ответов совпадает с порядком tool_calls
     tool_msgs = [m for m in llm.last_messages if m.get("role") == "tool"]
     assert [m["tool_call_id"] for m in tool_msgs] == ["c0", "c1", "c2"]
+
+
+async def test_bad_escape_in_args_recovered():
+    from app.agents.base import parse_args
+
+    # то, что реально прислала LLM: regex с \d внутри строки JSON
+    raw = r'{"x": "openssl x509 -enddate | grep -oP \d{4}"}'
+    assert parse_args(raw)["x"].endswith(r"\d{4}")
+
+    tool = make_tool()
+    tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="echo", arguments=raw))])
+    final = ChoiceMessage(content="ok", tool_calls=None)
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=FakeLLM([tc, final]), registry=AgentRegistry())
+    res = await agent.handle(Task(content="certs"))
+    assert res.success is True
+
+
+async def test_unparsable_args_reported_to_llm():
+    tool = make_tool()
+    tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="echo", arguments="{broken"))])
+    final = ChoiceMessage(content="ok", tool_calls=None)
+    llm = FakeLLM([tc, final])
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm, registry=AgentRegistry())
+    res = await agent.handle(Task(content="x"))
+    assert res.success is True
+    assert "invalid tool arguments" in llm.last_messages[-1]["content"]
