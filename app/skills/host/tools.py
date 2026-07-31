@@ -1,5 +1,5 @@
 from app.tools.base import Tool, Safety
-from app.tools.docker import shell_exec, ShellParams
+from app.tools.docker import host_exec, ShellParams
 from app.skills.shellsafe import check_wrapped_readonly
 
 
@@ -65,11 +65,11 @@ async def host_query(command: list[str]) -> dict:
             "command": command,
             "error": "команда не входит в список read-only; для изменяющих операций используй shell_exec (с подтверждением)",
         }
-    return await shell_exec(command)
+    return await host_exec(command)
 
 
 def build_tools() -> list[Tool]:
     return [
-        Tool("host_query", "Run a READ-ONLY host command (iptables -L/-S, df, du, ss, ip show, systemctl status, journalctl, free, uptime). May be wrapped in `sh -c '<pipeline>'` for pipes/grep/loops — still auto-executed if every command inside is read-only. Safe, auto-executed. For anything that changes state use shell_exec.", ShellParams, host_query, Safety.SAFE),
-        Tool("shell_exec", "Run a shell command on the host system (DESTRUCTIVE). Requires user confirmation.", ShellParams, shell_exec, Safety.DANGEROUS),
+        Tool("host_query", "Run a READ-ONLY host command (iptables -L/-S, df, du, ss, ip show, systemctl status, journalctl, free, uptime, ps). May be wrapped in `sh -c '<pipeline>'` for pipes/grep/loops — still auto-executed if every command inside is read-only. Safe, auto-executed. For anything that changes state use shell_exec.", ShellParams, host_query, Safety.SAFE),
+        Tool("shell_exec", "Run a shell command on the host system (DESTRUCTIVE). Requires user confirmation.", ShellParams, host_exec, Safety.DANGEROUS),
     ]

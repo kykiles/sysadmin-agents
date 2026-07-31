@@ -58,7 +58,12 @@ class Tool:
             params = self.params_model.model_validate(raw_args or {})
         except ValidationError as e:
             return json.dumps({"error": e.errors(include_url=False)})
-        result = await self.fn(**params.model_dump())
+        try:
+            result = await self.fn(**params.model_dump())
+        except Exception as e:
+            # ошибку отдаём агенту как результат вызова, а не роняем всю задачу:
+            # он увидит причину и попробует другой путь
+            return json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
         return _to_json(result)
 
 

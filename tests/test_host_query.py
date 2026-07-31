@@ -62,7 +62,7 @@ async def test_host_query_runs_readonly(monkeypatch):
     async def fake_shell(command):
         return {"command": command, "returncode": 0, "stdout": "ok", "stderr": ""}
 
-    monkeypatch.setattr(ht, "shell_exec", fake_shell)
+    monkeypatch.setattr(ht, "host_exec", fake_shell)
     out = await host_query(command=["df", "-h"])
     assert out["returncode"] == 0
 
