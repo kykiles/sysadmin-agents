@@ -71,3 +71,9 @@ def test_host_skill_exposes_host_query_safe():
     by_name = {t.name: t for t in build_tools()}
     assert by_name["host_query"].safety is Safety.SAFE
     assert by_name["shell_exec"].safety is Safety.DANGEROUS
+
+
+def test_crontab_listing_only():
+    assert _is_read_only(["crontab", "-l"])
+    assert not _is_read_only(["crontab", "-r"])
+    assert not _is_read_only(["crontab", "-"])

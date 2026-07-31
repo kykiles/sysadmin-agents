@@ -42,6 +42,9 @@ def _is_simple_read_only(command: list[str]) -> bool:
     binary, args = command[0], command[1:]
     if binary in _READ_ONLY_BINARIES:
         return True
+    if binary == "crontab":
+        # только просмотр текущего crontab
+        return args[:1] == ["-l"]
     if binary in ("iptables", "ip6tables"):
         if any(a in _IPTABLES_MUTATING for a in args):
             return False
