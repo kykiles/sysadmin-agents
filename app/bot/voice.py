@@ -1,5 +1,6 @@
 """Голос → текст локально (faster-whisper), без внешних API."""
 import asyncio
+import os
 from functools import lru_cache
 from io import BytesIO
 
@@ -16,13 +17,20 @@ def _model():
         settings.whisper_model,
         device="cpu",
         compute_type="int8",
+        cpu_threads=os.cpu_count() or 2,
         download_root=settings.whisper_cache_dir,
     )
 
 
 def _transcribe(audio: BytesIO) -> str:
     segments, _ = _model().transcribe(
-        audio, language=settings.whisper_language, vad_filter=True
+        audio,
+        language=settings.whisper_language,
+        vad_filter=True,
+        # словарь домена: без него модель слышит «Ремнав эйв», «айпи таблицы»
+        initial_prompt=settings.whisper_prompt,
+        # длинные паузы в диктовке иначе тянут галлюцинации из прошлого сегмента
+        condition_on_previous_text=False,
     )
     return " ".join(s.text.strip() for s in segments).strip()
 
