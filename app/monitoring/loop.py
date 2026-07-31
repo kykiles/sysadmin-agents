@@ -28,6 +28,7 @@ class MonitorConfig:
     tls_warn_days: int = 14
     tls_every_ticks: int = 12
     learn_every_ticks: int = 0
+    fail_streak: int = 2
 
 
 def _csv(value: str) -> list[str]:
@@ -46,22 +47,23 @@ def config_from_settings() -> MonitorConfig:
         tls_warn_days=settings.monitor_tls_warn_days,
         tls_every_ticks=settings.monitor_tls_every_ticks,
         learn_every_ticks=settings.learn_every_ticks,
+        fail_streak=settings.monitor_fail_streak,
     )
 
 
 async def run_checks(tick: int, cfg: MonitorConfig) -> list[CheckResult]:
-    results = [
-        await check_disk(cfg.disk_pct),
-        await check_memory(cfg.mem_min_mb),
-        await check_load(cfg.load_per_cpu),
-    ]
+    # Проверки независимы и почти целиком ждут сеть/ssh — гоняем разом.
+    # Каждая ловит свои исключения сама, поэтому gather не может упасть.
+    jobs = [check_disk(cfg.disk_pct), check_memory(cfg.mem_min_mb), check_load(cfg.load_per_cpu)]
     if cfg.containers:
-        results.extend(await check_docker(cfg.containers))
+        jobs.append(check_docker(cfg.containers))
     if cfg.remnawave_enabled:
-        results.append(await check_rw_nodes())
+        jobs.append(check_rw_nodes())
     if cfg.tls_endpoints and tick % cfg.tls_every_ticks == 0:
-        for ep in cfg.tls_endpoints:
-            results.append(await check_tls(ep, cfg.tls_warn_days))
+        jobs.extend(check_tls(ep, cfg.tls_warn_days) for ep in cfg.tls_endpoints)
+    results: list[CheckResult] = []
+    for r in await asyncio.gather(*jobs):
+        results.extend(r) if isinstance(r, list) else results.append(r)
     return results
 
 
@@ -78,17 +80,26 @@ async def run_tick(llm, bot, chat_id, state: MonitorState, cfg: MonitorConfig, t
                    learning=None) -> None:
     results = await run_checks(tick, cfg)
     prev = state.load_prev()
+    new: dict[str, tuple[bool, int]] = {}
     for r in results:
-        was_ok = prev.get(r.name, True)
-        if was_ok and not r.ok:
+        announced, fails = prev.get(r.name, (True, 0))
+        if r.ok:
+            if not announced:
+                await bot.send_message(
+                    chat_id,
+                    render_answer(f"**Восстановлено: {r.name}**\n\n> {r.detail}"),
+                )
+            new[r.name] = (True, 0)
+            continue
+        # Алертим не на первый провал, а на серию: одиночный всплеск load или
+        # оборвавшийся ssh иначе дают пару «сбой/восстановлено» на ровном месте.
+        fails += 1
+        if announced and fails >= cfg.fail_streak:
             text = await triage(llm, r)
-            await bot.send_message(chat_id, render_answer(f"🔴 **Сбой: {r.name}**\n\n{text}"))
-        elif not was_ok and r.ok:
-            await bot.send_message(
-                chat_id,
-                render_answer(f"✅ **Восстановлено: {r.name}**\n\n> {r.detail}"),
-            )
-    state.save(results)
+            await bot.send_message(chat_id, render_answer(f"**Сбой: {r.name}**\n\n{text}"))
+            announced = False
+        new[r.name] = (announced, fails)
+    state.save(new)
     if learning is not None and cfg.learn_every_ticks > 0 and tick % cfg.learn_every_ticks == 0:
         await _run_learning(bot, chat_id, learning)
 

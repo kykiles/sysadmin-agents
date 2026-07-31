@@ -121,10 +121,10 @@ async def test_check_tls_warns(monkeypatch):
 def test_state_roundtrip(tmp_path):
     st = MonitorState(str(tmp_path / "m.db"))
     assert st.load_prev() == {}
-    st.save([CheckResult("disk", True, "ok"), CheckResult("load", False, "high")])
-    assert st.load_prev() == {"disk": True, "load": False}
-    st.save([CheckResult("load", True, "recovered")])
-    assert st.load_prev() == {"disk": True, "load": True}
+    st.save({"disk": (True, 0), "load": (False, 3)})
+    assert st.load_prev() == {"disk": (True, 0), "load": (False, 3)}
+    st.save({"load": (True, 0)})
+    assert st.load_prev() == {"disk": (True, 0), "load": (True, 0)}
 
 
 # ---------- edge detection ----------
@@ -142,8 +142,9 @@ class FakeLLM:
         return ChoiceMessage(content="триаж: диск заполнен", tool_calls=None)
 
 
-def _cfg():
-    return MonitorConfig(interval=1, disk_pct=90, mem_min_mb=200, load_per_cpu=2.0)
+def _cfg(fail_streak: int = 1):
+    return MonitorConfig(interval=1, disk_pct=90, mem_min_mb=200, load_per_cpu=2.0,
+                         fail_streak=fail_streak)
 
 
 async def test_edge_alert_only_on_transition(tmp_path, monkeypatch):
@@ -155,7 +156,7 @@ async def test_edge_alert_only_on_transition(tmp_path, monkeypatch):
     await run_tick(FakeLLM(), bot, 1, st, _cfg(), 0)  # ok(unknown)->fail => alert
     await run_tick(FakeLLM(), bot, 1, st, _cfg(), 1)  # fail->fail => silent
     assert len(bot.sent) == 1
-    assert bot.sent[0].startswith("🔴")
+    assert bot.sent[0].startswith("<b>Сбой: disk</b>")
 
 
 async def test_recovery_message(tmp_path, monkeypatch):
@@ -168,8 +169,36 @@ async def test_recovery_message(tmp_path, monkeypatch):
     await run_tick(FakeLLM(), bot, 1, st, _cfg(), 0)  # fail => alert
     state_holder["ok"] = True
     await run_tick(FakeLLM(), bot, 1, st, _cfg(), 1)  # fail->ok => recovered
-    assert bot.sent[0].startswith("🔴")
-    assert bot.sent[1].startswith("✅ <b>Восстановлено: disk</b>")
+    assert bot.sent[0].startswith("<b>Сбой: disk</b>")
+    assert bot.sent[1].startswith("<b>Восстановлено: disk</b>")
+
+
+async def test_single_blip_is_debounced(tmp_path, monkeypatch):
+    """Одиночный провал при streak=2 молчит, и восстановление тоже молчит."""
+    state_holder = {"ok": False}
+    async def toggling(tick, cfg):
+        return [CheckResult("disk", state_holder["ok"], "detail")]
+    monkeypatch.setattr("app.monitoring.loop.run_checks", toggling)
+    st = MonitorState(str(tmp_path / "m.db"))
+    bot = FakeBot()
+    await run_tick(FakeLLM(), bot, 1, st, _cfg(fail_streak=2), 0)  # 1-й провал
+    state_holder["ok"] = True
+    await run_tick(FakeLLM(), bot, 1, st, _cfg(fail_streak=2), 1)  # снова ок
+    assert bot.sent == []
+
+
+async def test_alert_after_streak(tmp_path, monkeypatch):
+    async def always_fail(tick, cfg):
+        return [CheckResult("disk", False, "95%")]
+    monkeypatch.setattr("app.monitoring.loop.run_checks", always_fail)
+    st = MonitorState(str(tmp_path / "m.db"))
+    bot = FakeBot()
+    await run_tick(FakeLLM(), bot, 1, st, _cfg(fail_streak=2), 0)
+    assert bot.sent == []
+    await run_tick(FakeLLM(), bot, 1, st, _cfg(fail_streak=2), 1)
+    assert len(bot.sent) == 1
+    await run_tick(FakeLLM(), bot, 1, st, _cfg(fail_streak=2), 2)
+    assert len(bot.sent) == 1  # уже объявлено — молчим
 
 
 async def test_healthy_first_run_is_silent(tmp_path, monkeypatch):

@@ -113,7 +113,7 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=N
                 gw._resolve(task_id, Decision.APPROVED)
             else:
                 gw._resolve(task_id, Decision.REJECTED)
-        labels = {"yes": "Выполнить", "no": "Отмена", "all": "Выполнить всё без вопросов"}
+        labels = {"yes": "Yes", "no": "No", "all": "Yes, and don't ask again"}
         await callback.answer(labels.get(choice, choice))
         # html_text сохраняет уже отрендеренную разметку исходного сообщения;
         # callback.message.text отдал бы её плоским текстом и потерял бы оформление

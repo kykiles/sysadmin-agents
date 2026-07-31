@@ -26,7 +26,7 @@ class TelegramConfirmationGateway(ConfirmationGateway):
     async def request(self, req: ConfirmationRequest) -> Decision:
         if req.task_id in self._scoped:
             await self._bot.send_message(
-                self._chat_id, f"🔓 Авто-одобрено: {req.tool_name} {req.args}"
+                self._chat_id, f"Авто-одобрено: {req.tool_name} {req.args}"
             )
             return Decision.AUTO_APPROVED
         fut = asyncio.get_running_loop().create_future()

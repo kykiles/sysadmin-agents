@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     monitor_tls_endpoints: str = Field(default="", alias="MONITOR_TLS_ENDPOINTS")
     monitor_tls_warn_days: int = Field(default=14, alias="MONITOR_TLS_WARN_DAYS")
     monitor_tls_every_ticks: int = Field(default=12, alias="MONITOR_TLS_EVERY_TICKS")
+    monitor_fail_streak: int = Field(default=2, alias="MONITOR_FAIL_STREAK")
 
     learn_every_ticks: int = Field(default=0, alias="LEARN_EVERY_TICKS")
     learn_window_hours: int = Field(default=168, alias="LEARN_WINDOW_HOURS")

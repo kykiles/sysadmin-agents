@@ -4,8 +4,9 @@ from pathlib import Path
 
 
 class MonitorState:
-    """Хранит последнее ok/fail каждой проверки, чтобы алертить только на смену
-    состояния (edge-triggered) и не спамить после рестарта бота."""
+    """Хранит объявленное ok/fail каждой проверки и число подряд идущих провалов,
+    чтобы алертить только на смену состояния (edge-triggered), не спамить после
+    рестарта бота и не реагировать на одиночную аномальную выборку."""
 
     def __init__(self, db_path: str):
         self._path = db_path
@@ -23,18 +24,24 @@ class MonitorState:
                 "ok INTEGER NOT NULL, "
                 "ts TEXT NOT NULL)"
             )
+            try:
+                conn.execute("ALTER TABLE check_state ADD COLUMN fails INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # колонка уже есть — база с прошлой версии
 
-    def load_prev(self) -> dict[str, bool]:
+    def load_prev(self) -> dict[str, tuple[bool, int]]:
+        """name -> (объявленное состояние, число подряд идущих провалов)."""
         with self._connect() as conn:
-            rows = conn.execute("SELECT name, ok FROM check_state").fetchall()
-        return {name: bool(ok) for name, ok in rows}
+            rows = conn.execute("SELECT name, ok, fails FROM check_state").fetchall()
+        return {name: (bool(ok), fails) for name, ok, fails in rows}
 
-    def save(self, results: list) -> None:
+    def save(self, state: dict[str, tuple[bool, int]]) -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
-            for r in results:
+            for name, (ok, fails) in state.items():
                 conn.execute(
-                    "INSERT INTO check_state (name, ok, ts) VALUES (?, ?, ?) "
-                    "ON CONFLICT(name) DO UPDATE SET ok=excluded.ok, ts=excluded.ts",
-                    (r.name, 1 if r.ok else 0, now),
+                    "INSERT INTO check_state (name, ok, ts, fails) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(name) DO UPDATE SET "
+                    "ok=excluded.ok, ts=excluded.ts, fails=excluded.fails",
+                    (name, 1 if ok else 0, now, fails),
                 )

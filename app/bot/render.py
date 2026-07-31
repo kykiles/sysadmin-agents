@@ -98,7 +98,7 @@ def _format_command(tool_name: str, args: dict) -> str:
 
 
 def format_confirmation(req: ConfirmationRequest) -> str:
-    lines = ["⚠️ <b>Требуется подтверждение</b>"]
+    lines = ["<b>Требуется подтверждение</b>"]
     reason = (req.reason or "").strip()
     if reason:
         lines.append(html.escape(reason))

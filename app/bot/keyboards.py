@@ -14,11 +14,11 @@ def review_markup(outcome) -> InlineKeyboardMarkup:
 def _review_keyboard(candidate_ids: list[tuple[str, str]],
                      fact_ids: list[tuple[str, str]]) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=f"❌ Не предлагать: {label}", callback_data=f"lc:{sid}:no")]
+        [InlineKeyboardButton(text=f"Не предлагать: {label}", callback_data=f"lc:{sid}:no")]
         for sid, label in candidate_ids
     ]
     rows += [
-        [InlineKeyboardButton(text=f"🗑 Забыть: {label}", callback_data=f"lf:{sid}:del")]
+        [InlineKeyboardButton(text=f"Забыть: {label}", callback_data=f"lf:{sid}:del")]
         for sid, label in fact_ids
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -27,10 +27,10 @@ def _review_keyboard(candidate_ids: list[tuple[str, str]],
 def approve_keyboard(task_id: str, tool_name: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Выполнить", callback_data=f"cf:{task_id}:yes"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data=f"cf:{task_id}:no"),
+            InlineKeyboardButton(text="Yes", callback_data=f"cf:{task_id}:yes"),
+            InlineKeyboardButton(text="No", callback_data=f"cf:{task_id}:no"),
         ],
         [
-            InlineKeyboardButton(text="✅ Выполнить и больше не спрашивать", callback_data=f"cf:{task_id}:all"),
+            InlineKeyboardButton(text="Yes, and don't ask again", callback_data=f"cf:{task_id}:all"),
         ],
     ])

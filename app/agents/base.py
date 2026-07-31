@@ -129,7 +129,7 @@ class Agent:
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": out})
         limit = settings.agent_max_iterations
         note = f"достигнут лимит итераций ({limit}), ответ может быть неполным"
-        content = f"{last_content}\n\n⚠️ {note}" if last_content else note
+        content = f"{last_content}\n\n{note}" if last_content else note
         if self._memory:
             await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
             await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)

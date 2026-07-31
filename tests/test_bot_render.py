@@ -9,7 +9,7 @@ def test_shell_command_rendered_in_blockquote():
         description="d", reason="Освобождаю место — удаляю старые логи.",
     )
     text = format_confirmation(req)
-    assert "⚠️ <b>Требуется подтверждение</b>" in text
+    assert "<b>Требуется подтверждение</b>" in text
     assert "Освобождаю место — удаляю старые логи." in text
     assert "<blockquote expandable>rm -rf /var/log/old</blockquote>" in text
 
