@@ -43,16 +43,6 @@ class Settings(BaseSettings):
     remnawave_api_key: str = Field(default="", alias="REMNAWAVE_API_KEY")
     remnawave_timeout: int = Field(default=30, alias="REMNAWAVE_TIMEOUT")
 
-    whisper_model: str = Field(default="large-v3-turbo", alias="WHISPER_MODEL")
-    whisper_language: str = Field(default="ru", alias="WHISPER_LANGUAGE")
-    whisper_prompt: str = Field(
-        default="Системное администрирование: Docker, контейнер, nginx, Caddy, "
-        "systemd, iptables, Remnawave, VPN, бэкап, деплой, логи, сертификат, "
-        "порт, сервер, база данных, PostgreSQL, Redis.",
-        alias="WHISPER_PROMPT",
-    )
-    whisper_cache_dir: str = Field(default="/data/whisper", alias="WHISPER_CACHE_DIR")
-
     monitor_enabled: bool = Field(default=False, alias="MONITOR_ENABLED")
     monitor_interval_seconds: int = Field(default=300, alias="MONITOR_INTERVAL_SECONDS")
     monitor_db_path: str = Field(default="/data/monitoring.db", alias="MONITOR_DB_PATH")
