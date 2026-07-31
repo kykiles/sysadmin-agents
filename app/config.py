@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     confirmation_timeout_seconds: int = Field(
         default=300, alias="CONFIRMATION_TIMEOUT_SECONDS"
     )
+    ssh_key_path: str = Field(default="/data/ssh/id_ed25519", alias="SSH_KEY_PATH")
+    ssh_user: str = Field(default="root", alias="SSH_USER")
     audit_log_path: str = Field(default="/data/audit.log", alias="AUDIT_LOG_PATH")
     audit_trail_path: str = Field(default="/data/audit.jsonl", alias="AUDIT_TRAIL_PATH")
     dialog_db_path: str = Field(default="/data/dialog.db", alias="DIALOG_DB_PATH")
