@@ -82,6 +82,26 @@ async def test_set_bot_commands_registers_menu():
     assert [c.command for c in commands] == ["start", "help", "reset", "learn", "reload"]
 
 
+def test_with_quote():
+    from app.bot.handlers import with_quote
+
+    def msg(text, *, quote=None, reply=None):
+        m = MagicMock()
+        m.text = text
+        m.quote = MagicMock(text=quote) if quote else None
+        m.reply_to_message = MagicMock(text=reply, caption=None) if reply else None
+        return m
+
+    assert with_quote(msg("привет")) == "привет"
+
+    out = with_quote(msg("а порт какой?", reply="nginx работает на 80"))
+    assert "nginx работает на 80" in out and "а порт какой?" in out
+
+    # выделенный фрагмент важнее всего сообщения
+    out = with_quote(msg("почему?", quote="порт 80", reply="nginx работает на 80"))
+    assert "порт 80" in out and "nginx" not in out
+
+
 async def test_report_file_removed_after_send(tmp_path):
     """Отчёт уходит в Telegram и не остаётся на диске."""
     from app.bot.handlers import build_router

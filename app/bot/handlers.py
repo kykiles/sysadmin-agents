@@ -12,6 +12,26 @@ from app.bot.render import render_answer, split_message
 from app.learning.review import render_review, resolve_candidate, resolve_fact, run_review
 
 
+def with_quote(message: Message) -> str:
+    """Reply на прошлый ответ: подставляем цитату в текст задачи.
+
+    Старый ответ мог выпасть из окна истории по бюджету токенов — цитата
+    возвращает его в текущий запрос. message.quote — выделенный фрагмент,
+    если пользователь выделил часть ответа.
+    """
+    text = message.text or ""
+    quoted = message.quote.text if message.quote else None
+    if not quoted and message.reply_to_message:
+        src = message.reply_to_message
+        quoted = src.text or src.caption
+    if not quoted:
+        return text
+    return (
+        "Пользователь уточняет по этому фрагменту прошлого ответа:\n"
+        f"<<<\n{quoted}\n>>>\n\n{text}"
+    )
+
+
 def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=None,
                  reload_library=None) -> Router:
     router = Router()
@@ -83,7 +103,7 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=N
 
     @router.message(WhitelistFilter(allowed_id))
     async def _task(message: Message):
-        task = Task(content=message.text or "", chat_id=str(message.chat.id))
+        task = Task(content=with_quote(message), chat_id=str(message.chat.id))
         result = await registry.request("director", task)
         if result.attachment:
             # подпись режем ДО рендера: обрезка готового HTML разорвала бы тег
