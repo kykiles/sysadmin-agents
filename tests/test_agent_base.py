@@ -2,7 +2,6 @@ import json
 from unittest.mock import AsyncMock
 from pydantic import BaseModel
 from app.agents.base import Agent
-from app.agents.registry import AgentRegistry
 from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 from app.tools.base import Tool, Safety
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
@@ -35,8 +34,7 @@ async def test_agent_runs_safe_tool_then_answers():
     tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="echo", arguments=json.dumps({"x": "hi"})))])
     final = ChoiceMessage(content="result: hi", tool_calls=None)
     llm = FakeLLM([tc, final])
-    reg = AgentRegistry()
-    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm, registry=reg)
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm)
     res = await agent.handle(Task(content="do it"))
     assert res.success is True
     assert "result" in res.content
@@ -58,9 +56,7 @@ async def test_dangerous_rejected():
     tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"c": "bot"})))])
     final = ChoiceMessage(content="rejected", tool_calls=None)
     llm = FakeLLM([tc, final])
-    reg = AgentRegistry()
-    reg.set_confirmation_gateway(NoGateway())
-    agent = Agent(name="t", system_prompt="sys", tools=[dt], llm=llm, registry=reg)
+    agent = Agent(name="t", system_prompt="sys", tools=[dt], llm=llm, gateway=NoGateway())
     res = await agent.handle(Task(content="restart bot"))
     assert res.success is True
     assert "rejected" in res.content
@@ -87,9 +83,7 @@ async def test_dangerous_action_is_audited(tmp_path, monkeypatch):
     tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"c": "bot"})))])
     final = ChoiceMessage(content="готово", tool_calls=None)
     llm = FakeLLM([tc, final])
-    reg = AgentRegistry()
-    reg.set_confirmation_gateway(YesGateway())
-    agent = Agent(name="hostadmin", system_prompt="sys", tools=[dt], llm=llm, registry=reg)
+    agent = Agent(name="hostadmin", system_prompt="sys", tools=[dt], llm=llm, gateway=YesGateway())
     await agent.handle(Task(content="restart bot"))
     rec = json.loads(path.read_text(encoding="utf-8").strip())
     assert rec["agent"] == "hostadmin"
@@ -119,9 +113,7 @@ async def test_auto_approved_action_is_audited(tmp_path, monkeypatch):
     tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"c": "bot"})))])
     final = ChoiceMessage(content="готово", tool_calls=None)
     llm = FakeLLM([tc, final])
-    reg = AgentRegistry()
-    reg.set_confirmation_gateway(AutoGateway())
-    agent = Agent(name="hostadmin", system_prompt="sys", tools=[dt], llm=llm, registry=reg)
+    agent = Agent(name="hostadmin", system_prompt="sys", tools=[dt], llm=llm, gateway=AutoGateway())
     await agent.handle(Task(content="restart bot"))
     rec = json.loads(path.read_text(encoding="utf-8").strip())
     assert rec["decision"] == "auto-approved"
@@ -141,9 +133,8 @@ async def test_max_iterations_keeps_partial_answer(monkeypatch):
         )
 
     llm = FakeLLM([_tool_msg(1), _tool_msg(2)])
-    reg = AgentRegistry()
     mem = FakeMemory()
-    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm, registry=reg, memory=mem)
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm, memory=mem)
     res = await agent.handle(Task(content="do it"))
     assert res.success is False
     assert "работаю, шаг 2" in res.content
@@ -166,8 +157,7 @@ async def test_agent_saves_final_turn_to_memory():
     mem = FakeMemory()
     final = ChoiceMessage(content="готово", tool_calls=None)
     llm = FakeLLM([final])
-    reg = AgentRegistry()
-    agent = Agent(name="d", system_prompt="sys", tools=[], llm=llm, registry=reg, memory=mem)
+    agent = Agent(name="d", system_prompt="sys", tools=[], llm=llm, memory=mem)
     await agent.handle(Task(content="сделай"))
     assert mem.items == [
         {"role": "user", "content": "сделай"},
@@ -181,8 +171,7 @@ async def test_agent_loads_history_into_prompt():
     mem.append("c1", "assistant", "прошлый ответ")
     final = ChoiceMessage(content="ок", tool_calls=None)
     llm = FakeLLM([final])
-    reg = AgentRegistry()
-    agent = Agent(name="d", system_prompt="sys", tools=[], llm=llm, registry=reg, memory=mem)
+    agent = Agent(name="d", system_prompt="sys", tools=[], llm=llm, memory=mem)
     await agent.handle(Task(content="новый"))
     contents = [m["content"] for m in llm.last_messages]
     assert "прошлый вопрос" in contents
@@ -194,8 +183,7 @@ async def test_agent_loads_history_into_prompt():
 async def test_agent_without_memory_unchanged():
     final = ChoiceMessage(content="ответ", tool_calls=None)
     llm = FakeLLM([final])
-    reg = AgentRegistry()
-    agent = Agent(name="t", system_prompt="sys", tools=[], llm=llm, registry=reg)
+    agent = Agent(name="t", system_prompt="sys", tools=[], llm=llm)
     res = await agent.handle(Task(content="q"))
     assert res.content == "ответ"
 
@@ -221,8 +209,7 @@ async def test_safe_tools_run_in_parallel():
     ])
     final = ChoiceMessage(content="done", tool_calls=None)
     llm = FakeLLM([calls, final])
-    reg = AgentRegistry()
-    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm, registry=reg)
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm)
     res = await agent.handle(Task(content="do"))
     assert res.success is True
     assert peak == 3
@@ -241,7 +228,7 @@ async def test_bad_escape_in_args_recovered():
     tool = make_tool()
     tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="echo", arguments=raw))])
     final = ChoiceMessage(content="ok", tool_calls=None)
-    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=FakeLLM([tc, final]), registry=AgentRegistry())
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=FakeLLM([tc, final]))
     res = await agent.handle(Task(content="certs"))
     assert res.success is True
 
@@ -251,7 +238,7 @@ async def test_unparsable_args_reported_to_llm():
     tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="echo", arguments="{broken"))])
     final = ChoiceMessage(content="ok", tool_calls=None)
     llm = FakeLLM([tc, final])
-    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm, registry=AgentRegistry())
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm)
     res = await agent.handle(Task(content="x"))
     assert res.success is True
     assert "invalid tool arguments" in llm.last_messages[-1]["content"]

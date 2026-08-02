@@ -1,13 +1,19 @@
 import asyncio
 from aiogram import Bot
-from app.agents.registry import ConfirmationGateway
 from app.agents.messages import ConfirmationRequest, Decision
 from app.bot.keyboards import approve_keyboard
 from app.bot.render import format_confirmation
 from app.config import settings
 
 
-class TelegramConfirmationGateway(ConfirmationGateway):
+class TelegramConfirmationGateway:
+    """Спрашивает пользователя об опасной операции инлайн-кнопками.
+
+    Агент вызывает `request` и ждёт решения; кнопка в Telegram приводит к
+    `approve`/`reject`. `release` вызывается по завершении задачи и снимает
+    разовое «не спрашивать снова».
+    """
+
     def __init__(self, bot: Bot, chat_id: int, timeout: int | None = None):
         self._bot = bot
         self._chat_id = chat_id
@@ -22,6 +28,15 @@ class TelegramConfirmationGateway(ConfirmationGateway):
 
     def release(self, task_id: str) -> None:
         self._scoped.discard(task_id)
+
+    def approve(self, task_id: str, scope_all: bool = False) -> None:
+        """Одобрить ожидающий запрос; `scope_all` — и все следующие в этой задаче."""
+        if scope_all:
+            self._scoped.add(task_id)
+        self._resolve(task_id, Decision.APPROVED)
+
+    def reject(self, task_id: str) -> None:
+        self._resolve(task_id, Decision.REJECTED)
 
     async def request(self, req: ConfirmationRequest) -> Decision:
         if req.task_id in self._scoped:

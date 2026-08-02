@@ -1,6 +1,5 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
-from app.agents.registry import AgentRegistry
 from app.agents.messages import Task, Result, Decision
 from app.bot.gateway import TelegramConfirmationGateway
 
@@ -14,30 +13,26 @@ class FakeDirector:
 
 
 async def test_callback_approve_resolves_gateway():
-    reg = AgentRegistry()
     bot = MagicMock(); bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
     gw = TelegramConfirmationGateway(bot, chat_id=1, timeout=30)
-    reg.set_confirmation_gateway(gw)
 
     fut = asyncio.get_event_loop().create_future()
     gw._pending["abc"] = fut
 
-    gw._resolve("abc", Decision.APPROVED)
+    gw.approve("abc")
     assert fut.result() is Decision.APPROVED
 
 
 async def test_callback_all_scopes_task_and_approves():
     from app.bot.handlers import build_router
     from unittest.mock import AsyncMock, MagicMock as MM
-    reg = AgentRegistry()
     bot = MM(); bot.send_message = AsyncMock(return_value=MM(message_id=1))
     gw = TelegramConfirmationGateway(bot, chat_id=1, timeout=30)
-    reg.set_confirmation_gateway(gw)
 
     fut = asyncio.get_event_loop().create_future()
     gw._pending["t1"] = fut
 
-    router = build_router(registry=reg, allowed_id=1, memory=MM())
+    router = build_router(director=FakeDirector("ok"), gateway=gw, allowed_id=1, memory=MM())
     handler = [h.callback for h in router.callback_query.handlers if h.callback.__name__ == "_confirm"][0]
 
     cb = MM()
@@ -66,8 +61,7 @@ def test_build_router_accepts_memory():
         def __init__(self): self.cleared = False
         def clear(self, chat_id): self.cleared = True
 
-    reg = AgentRegistry()
-    router = build_router(registry=reg, allowed_id=1, memory=DummyMem())
+    router = build_router(director=FakeDirector("ok"), allowed_id=1, memory=DummyMem())
     assert router is not None
     names = {h.callback.__name__ for h in router.message.handlers}
     assert {"_start", "_help", "_reset", "_task"} <= names
@@ -105,14 +99,14 @@ def test_with_quote():
 async def test_report_file_removed_after_send(tmp_path):
     """Отчёт уходит в Telegram и не остаётся на диске."""
     from app.bot.handlers import build_router
-    reg = AgentRegistry()
     report = tmp_path / "r.md"
     report.write_text("# отчёт", encoding="utf-8")
-    reg.request = AsyncMock(
+    director = MagicMock()
+    director.handle = AsyncMock(
         return_value=Result(task_id="t", content="итог", attachment=str(report))
     )
 
-    router = build_router(registry=reg, allowed_id=1, memory=MagicMock())
+    router = build_router(director=director, allowed_id=1, memory=MagicMock())
     handler = [h.callback for h in router.message.handlers if h.callback.__name__ == "_task"][0]
 
     msg = MagicMock()

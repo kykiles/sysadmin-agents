@@ -4,7 +4,6 @@ from pathlib import Path
 
 from app.agents.director import Director
 from app.agents.messages import Task
-from app.agents.registry import AgentRegistry
 from app.bot.reports import save_report, _slug
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
 
@@ -55,7 +54,7 @@ async def test_director_exposes_report_path_as_attachment(tmp_path, monkeypatch)
             {"title": "Ноды", "markdown": "# Ноды\n\n10 штук"})),
     )])
     final = ChoiceMessage(content="Отчёт готов. Нод: 10.", tool_calls=None)
-    d = Director(llm=FakeLLM([call, final]), registry=AgentRegistry())
+    d = Director(llm=FakeLLM([call, final]))
     result = await d.handle(Task(content="оформи отчёт по нодам", chat_id="c1"))
 
     assert result.attachment.endswith(".md")
@@ -73,7 +72,7 @@ async def test_attachment_resets_between_tasks(tmp_path, monkeypatch):
     d = Director(
         llm=FakeLLM([call, ChoiceMessage(content="готово", tool_calls=None),
                      ChoiceMessage(content="просто ответ", tool_calls=None)]),
-        registry=AgentRegistry(),
+        
     )
     first = await d.handle(Task(content="оформи отчёт", chat_id="c1"))
     second = await d.handle(Task(content="как дела", chat_id="c1"))

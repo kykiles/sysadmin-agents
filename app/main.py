@@ -3,7 +3,6 @@ from pathlib import Path
 from app.config import settings
 from app.logging import setup_logging, get_logger
 from app.llm.client import LLMClient
-from app.agents.registry import AgentRegistry
 from app.agents.director import Director
 from app.skills.loader import load_all_skills
 from app.memory.history import DialogHistory
@@ -27,7 +26,6 @@ async def main() -> None:
         base_url=settings.llm_base_url,
         model=settings.llm_model,
     )
-    registry = AgentRegistry()
     app_dir = Path(__file__).parent
     init_store(settings.dialog_db_path)
     skills = load_all_skills(app_dir / "skills")
@@ -45,9 +43,10 @@ async def main() -> None:
         lint=LintState(settings.journal_db_path),
         llm=llm,
     ) if journal is not None else None
-    director = Director(llm=llm, registry=registry,
+    bot = create_bot()
+    gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)
+    director = Director(llm=llm, gateway=gateway,
                         memory=history, journal=journal, skills=skills)
-    registry.register(director)
 
     def reload_library() -> str:
         """Перечитать skills/ без рестарта. Новые скиллы подхватываются сразу;
@@ -57,14 +56,9 @@ async def main() -> None:
         director.reload_library(new_skills)
         return f"навыков: {len(new_skills)}"
 
-    bot = create_bot()
-    gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)
-    registry.set_confirmation_gateway(gateway)
-
-    await registry.run_forever()
     await set_bot_commands(bot)
-    dp = create_dispatcher(registry=registry, memory=history, learning=learning,
-                           reload_library=reload_library)
+    dp = create_dispatcher(director=director, gateway=gateway, memory=history,
+                           learning=learning, reload_library=reload_library)
 
     monitor_task: asyncio.Task | None = None
     if settings.monitor_enabled:
@@ -74,14 +68,13 @@ async def main() -> None:
                         config_from_settings(), learning)
         )
 
-    log.info("startup", model=settings.llm_model, agents=registry.available_agents(),
+    log.info("startup", model=settings.llm_model, skills=sorted(skills),
              monitor=settings.monitor_enabled)
     try:
         await dp.start_polling(bot)
     finally:
         if monitor_task is not None:
             monitor_task.cancel()
-        await registry.stop()
         await bot.session.close()
         log.info("shutdown")
 

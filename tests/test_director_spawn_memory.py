@@ -1,7 +1,6 @@
 import json
 
 from app.agents.director import Director, _memory_index, _spawnable
-from app.agents.registry import AgentRegistry
 from app.agents.messages import Task
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
 from app.memory import facts
@@ -50,7 +49,7 @@ async def test_spawn_runs_temporary_agent(tmp_path):
         ChoiceMessage(content="готово", tool_calls=None),
         ChoiceMessage(content="Пост готов.", tool_calls=None),
     ])
-    d = Director(llm=llm, registry=AgentRegistry(), skills=_skill())
+    d = Director(llm=llm, skills=_skill())
     res = await d.handle(Task(content="сделай пост"))
 
     assert res.content == "Пост готов."
@@ -71,7 +70,7 @@ async def test_spawn_dedupes_tools_shared_by_skills(tmp_path):
         ChoiceMessage(content="готово", tool_calls=None),
         ChoiceMessage(content="ок", tool_calls=None),
     ])
-    d = Director(llm=llm, registry=AgentRegistry(), skills=lib)
+    d = Director(llm=llm, skills=lib)
     await d.handle(Task(content="сделай"))
 
     names = [t["function"]["name"] for t in llm.seen_tools[1]]
@@ -84,7 +83,7 @@ async def test_spawn_rejects_unknown_skill(tmp_path):
         _call("spawn", {"role": "х", "skills": ["нетакого"], "task": "t"}),
         ChoiceMessage(content="навыка нет", tool_calls=None),
     ])
-    d = Director(llm=llm, registry=AgentRegistry(), skills=_skill())
+    d = Director(llm=llm, skills=_skill())
     await d.handle(Task(content="сделай"))
 
     tool_reply = json.loads(llm.seen[1][-1]["content"])
@@ -103,7 +102,7 @@ async def test_memory_skill_is_not_spawnable(tmp_path):
         _call("spawn", {"role": "х", "skills": ["memory"], "task": "запомни"}),
         ChoiceMessage(content="памяти у агентов нет", tool_calls=None),
     ])
-    d = Director(llm=llm, registry=AgentRegistry(), skills=lib)
+    d = Director(llm=llm, skills=lib)
     await d.handle(Task(content="сделай"))
 
     tool_reply = json.loads(llm.seen[1][-1]["content"])
@@ -123,3 +122,48 @@ def test_memory_index_lists_scopes_not_facts(tmp_path):
     assert "docker: 2 фактов" in idx
     assert "global: 1 фактов" in idx
     assert "/opt/app" not in idx  # значения в промпт не попадают
+
+
+async def test_spawned_agent_gets_one_host_query_with_union_scope(tmp_path):
+    """tls + security → один host_query, видящий бинарники обоих навыков.
+
+    Раньше это были два инструмента с разными именами; после унификации имени
+    коллизия в uniq молча оставила бы скоуп только первого навыка.
+    """
+    from app.skills.security.tools import ACCESS as SEC
+    from app.skills.tls.tools import ACCESS as TLS
+
+    facts.init_store(str(tmp_path / "f.db"))
+    lib = {
+        "tls": Skill(name="tls", description="сертификаты", instructions="п", tools=[], access=TLS),
+        "security": Skill(name="security", description="аудит", instructions="п", tools=[], access=SEC),
+    }
+    llm = FakeLLM([
+        _call("spawn", {"role": "аудитор", "skills": ["tls", "security"], "task": "проверь"}),
+        ChoiceMessage(content="проверено", tool_calls=None),
+        ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    d = Director(llm=llm, skills=lib)
+    await d.handle(Task(content="аудит сертификатов"))
+
+    sub_tools = {t["function"]["name"] for t in llm.seen_tools[1]}
+    assert "host_query" in sub_tools
+    assert not {"tls_query", "sec_query"} & sub_tools  # старых имён больше нет
+
+    (schema,) = [t for t in llm.seen_tools[1] if t["function"]["name"] == "host_query"]
+    description = schema["function"]["description"]
+    assert "certbot" in description and "fail2ban-client" in description
+
+
+async def test_spawned_agent_without_host_skills_gets_no_host_query(tmp_path):
+    facts.init_store(str(tmp_path / "f.db"))
+    llm = FakeLLM([
+        _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши"}),
+        ChoiceMessage(content="написал", tool_calls=None),
+        ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    d = Director(llm=llm, skills=_skill())
+    await d.handle(Task(content="пост"))
+
+    sub_tools = {t["function"]["name"] for t in llm.seen_tools[1]}
+    assert sub_tools == {"echo"}

@@ -1,38 +1,28 @@
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+
+from app.store import SqliteStore
 
 
-class TaskJournal:
+class TaskJournal(SqliteStore):
     """Журнал завершённых задач Директора: что просили, кто делал, какой ценой.
 
     Отдельно от audit.log: тот пишет только опасные действия, а поводом
     закристаллизовать метод чаще служат безопасные многошаговые чтения.
     """
 
-    def __init__(self, db_path: str):
-        self._path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
-
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS tasks ("
-                "id TEXT PRIMARY KEY, "
-                "ts TEXT NOT NULL, "
-                "chat_id TEXT, "
-                "intent TEXT NOT NULL, "
-                "agent TEXT, "
-                "tool_seq TEXT, "
-                "iterations INTEGER, "
-                "success INTEGER, "
-                "reviewed INTEGER DEFAULT 0)"
-            )
+    SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS tasks ("
+        "id TEXT PRIMARY KEY, "
+        "ts TEXT NOT NULL, "
+        "chat_id TEXT, "
+        "intent TEXT NOT NULL, "
+        "agent TEXT, "
+        "tool_seq TEXT, "
+        "iterations INTEGER, "
+        "success INTEGER, "
+        "reviewed INTEGER DEFAULT 0)",
+    )
 
     def record(
         self,

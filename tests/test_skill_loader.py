@@ -51,11 +51,13 @@ def test_db_and_host_skills_load():
     skills = load_all_skills(SKILLS_DIR)
     assert {"docker", "db", "host"} <= set(skills)
     db_tools = {t.name for t in skills["db"].tools}
-    host_tools = {t.name: t for t in skills["host"].tools}
     assert db_tools == {"docker_query"}
     assert skills["db"].tools[0].safety is Safety.SAFE
-    assert "shell_exec" in host_tools
-    assert host_tools["shell_exec"].safety is Safety.DANGEROUS
+    # host не приносит готовых инструментов — он объявляет доступ к хосту,
+    # из которого при спавне собирается host_query (+ shell_exec)
+    assert skills["host"].tools == []
+    assert "iptables" in skills["host"].access.binaries
+    assert skills["host"].access.exec_allowed is True
 
 
 def test_deploy_skill_loads():

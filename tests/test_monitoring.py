@@ -236,3 +236,23 @@ async def test_run_checks_skips_optional_when_unconfigured(monkeypatch):
     cfg = MonitorConfig(interval=1, disk_pct=90, mem_min_mb=200, load_per_cpu=2.0)
     results = await run_checks(0, cfg)
     assert len(results) == 3  # без docker/remnawave/tls
+
+
+def test_monitor_state_migrates_db_without_fails_column(tmp_path):
+    """База прошлой версии: check_state без колонки fails."""
+    import sqlite3
+
+    from app.monitoring.state import MonitorState
+
+    db = tmp_path / "monitoring.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE check_state (name TEXT PRIMARY KEY, ok INTEGER NOT NULL, ts TEXT NOT NULL)"
+        )
+        conn.execute("INSERT INTO check_state (name, ok, ts) VALUES ('disk', 1, '2026-01-01T00:00:00+00:00')")
+
+    st = MonitorState(str(db))
+    assert st.load_prev() == {"disk": (True, 0)}
+
+    st.save({"disk": (False, 2)})
+    assert st.load_prev() == {"disk": (False, 2)}

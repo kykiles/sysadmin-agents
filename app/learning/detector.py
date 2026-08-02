@@ -1,12 +1,11 @@
 import json
 import re
-import sqlite3
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 
 from app.logging import get_logger
+from app.store import SqliteStore
 
 log = get_logger("learning.detector")
 
@@ -39,26 +38,16 @@ class DetectResult:
     considered_ids: list[str] = field(default_factory=list)
 
 
-class CandidateStore:
+class CandidateStore(SqliteStore):
     """Что уже предлагали и что человек отклонил. Рядом с журналом задач."""
 
-    def __init__(self, db_path: str):
-        self._path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
-
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS candidates ("
-                "signature TEXT PRIMARY KEY, "
-                "label TEXT NOT NULL, "
-                "status TEXT NOT NULL, "  # proposed | rejected | done
-                "ts TEXT NOT NULL)"
-            )
+    SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS candidates ("
+        "signature TEXT PRIMARY KEY, "
+        "label TEXT NOT NULL, "
+        "status TEXT NOT NULL, "  # proposed | rejected | done
+        "ts TEXT NOT NULL)",
+    )
 
     def known_signatures(self) -> set[str]:
         with self._connect() as conn:

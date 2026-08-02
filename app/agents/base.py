@@ -6,7 +6,6 @@ from app.config import settings
 from app.llm.client import LLMClient
 from app.tools.base import Tool, Safety, INTENT_FIELD
 from app.agents.messages import Task, Result, ConfirmationRequest, Decision
-from app.agents.registry import AgentRegistry
 from app.logging import get_logger
 
 log = get_logger("agent")
@@ -31,14 +30,16 @@ class Agent:
         system_prompt: str,
         tools: list[Tool],
         llm: LLMClient,
-        registry: AgentRegistry,
+        gateway=None,
         memory=None,
     ):
         self.name = name
         self.system_prompt = system_prompt
         self.tools = tools
         self._llm = llm
-        self._registry = registry
+        # Шлюз подтверждений: объект с async request(ConfirmationRequest) -> Decision.
+        # Без него опасные вызовы отклоняются — агент не может действовать вслепую.
+        self._gateway = gateway
         self._memory = memory
 
     def _find_tool(self, name: str) -> Tool | None:
@@ -72,7 +73,10 @@ class Agent:
             reason=intent or reason,
         )
         log.info("confirmation_required", agent=self.name, tool=tool.name, args=args)
-        decision = await self._registry.confirm(req)
+        decision = (
+            await self._gateway.request(req) if self._gateway is not None
+            else Decision.REJECTED
+        )
         if decision is Decision.REJECTED:
             out = json.dumps({"error": "rejected by user"})
         else:

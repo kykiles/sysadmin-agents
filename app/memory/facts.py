@@ -1,31 +1,22 @@
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
+
+from app.store import SqliteStore
 
 
-class KnowledgeStore:
-    def __init__(self, db_path: str):
-        self._path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+class KnowledgeStore(SqliteStore):
+    SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS facts ("
+        "scope TEXT NOT NULL, "
+        "key TEXT NOT NULL, "
+        "value TEXT NOT NULL, "
+        "ts TEXT NOT NULL, "
+        "kind TEXT NOT NULL DEFAULT 'stable', "
+        "PRIMARY KEY (scope, key))",
+    )
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
-
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS facts ("
-                "scope TEXT NOT NULL, "
-                "key TEXT NOT NULL, "
-                "value TEXT NOT NULL, "
-                "ts TEXT NOT NULL, "
-                "kind TEXT NOT NULL DEFAULT 'stable', "
-                "PRIMARY KEY (scope, key))"
-            )
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(facts)").fetchall()}
-            if "kind" not in cols:
-                conn.execute("ALTER TABLE facts ADD COLUMN kind TEXT NOT NULL DEFAULT 'stable'")
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        self._add_column(conn, "facts", "kind", "TEXT NOT NULL DEFAULT 'stable'")
 
     def remember(self, scope: str, key: str, value: str, kind: str = "stable") -> None:
         ts = datetime.now(timezone.utc).isoformat()

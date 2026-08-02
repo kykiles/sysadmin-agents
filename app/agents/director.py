@@ -1,16 +1,18 @@
 import asyncio
+from functools import reduce
+from operator import or_
 
 from pydantic import BaseModel, Field
 from app.agents.base import Agent
 from app.agents.loader import compose_prompt
 from app.agents.messages import Task, Result
-from app.agents.registry import AgentRegistry
 from app.bot.reports import save_report
 from app.config import settings
 from app.llm.client import LLMClient
 from app.logging import get_logger
 from app.memory.facts import get_store
 from app.skills.memory.tools import build_tools as memory_tools
+from app.skills.readonly import HostAccess, build_host_tools
 from app.tools.base import Tool, Safety
 
 log = get_logger("director")
@@ -91,7 +93,7 @@ def _memory_index() -> str:
 
 
 class Director(Agent):
-    def __init__(self, llm: LLMClient, registry: AgentRegistry,
+    def __init__(self, llm: LLMClient, gateway=None,
                  memory=None, journal=None, skills: dict | None = None):
         async def _make_report(title: str, markdown: str) -> dict:
             path = await asyncio.to_thread(
@@ -108,15 +110,20 @@ class Director(Agent):
             if unknown:
                 return {"error": f"неизвестные навыки: {unknown}", "available": list(self._library)}
             chosen = [self._library[s] for s in skills]
+            # Доступ к хосту складывается: агенту с tls+security нужен один host_query,
+            # видящий бинарники обоих навыков, иначе он натыкался бы на отказы.
+            access = reduce(or_, (s.access for s in chosen), HostAccess())
             # Навыки пересекаются по инструментам (docker+observe → docker_ps и др.),
             # а шлюз на дубль имени в tools отвечает 400. Первый выигрывает.
             uniq = {t.name: t for s in chosen for t in s.tools}
+            for t in build_host_tools(access):
+                uniq.setdefault(t.name, t)
             sub = Agent(
                 name=f"spawned:{'+'.join(skills)}",
                 system_prompt=compose_prompt(role, chosen),
                 tools=list(uniq.values()),
                 llm=llm,
-                registry=registry,
+                gateway=gateway,
             )
             log.info("spawn", role=role, skills=skills)
             # Временный агент: не регистрируем в реестре, вызываем напрямую и забываем
@@ -159,12 +166,16 @@ class Director(Agent):
             ),
             tools=tools,
             llm=llm,
-            registry=registry,
+            gateway=gateway,
             memory=memory,
         )
         self._library = library
         self._base_prompt = self.system_prompt
         self._journal = journal
+        # Задачи Директора идут строго по одной: накопители ниже живут на инстансе,
+        # параллельный handle их бы перемешал. Спавнутых агентов замок не касается —
+        # они выполняются внутри одной задачи и параллелятся намеренно.
+        self._lock = asyncio.Lock()
         self._sub_trace: list[str] = []
         self._agents_used: list[str] = []
         self._report_path: str = ""
@@ -177,17 +188,21 @@ class Director(Agent):
         )
 
     async def handle(self, task: Task) -> Result:
-        # Реестр отдаёт агенту задачи по одной (_consume), поэтому накопители на
-        # инстансе безопасны — параллельных handle у Директора не бывает.
-        self._sub_trace = []
-        self._agents_used = []
-        self._report_path = ""
-        self.system_prompt = self._base_prompt + await asyncio.to_thread(_memory_index)
-        result = await super().handle(task)
-        result.attachment = self._report_path
-        if self._journal is not None:
-            await self._write_journal(task, result)
-        return result
+        async with self._lock:
+            self._sub_trace = []
+            self._agents_used = []
+            self._report_path = ""
+            self.system_prompt = self._base_prompt + await asyncio.to_thread(_memory_index)
+            try:
+                result = await super().handle(task)
+            finally:
+                # «Не спрашивать снова» действует в пределах одной задачи
+                if self._gateway is not None:
+                    self._gateway.release(task.id)
+            result.attachment = self._report_path
+            if self._journal is not None:
+                await self._write_journal(task, result)
+            return result
 
     async def _write_journal(self, task: Task, result: Result) -> None:
         try:

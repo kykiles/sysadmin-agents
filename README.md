@@ -10,7 +10,15 @@
   - `docker` — контейнеры и compose: просмотр, логи, статистика, инспекция, перезапуск/остановка/запуск, `docker exec`, `compose up/down`
   - `db` — read-only запросы к БД в контейнерах (psql, mysql, sqlite3)
   - `host` — команды на хосте: firewall/iptables, systemd, диски
+  - `observe` — диагностика хоста: journalctl, ss, vmstat, нагрузка, логи под `/var/log`
+  - `security` — аудит: открытые порты, правила firewall, fail2ban, `sshd -T`, доступные обновления
+  - `tls` — сертификаты: механизм продления, сроки, проверка эндпоинта, продление и reload
+  - `ssh` — те же команды на удалённой ноде через SSH
   - `deploy` — деплой сайтов под `/opt` на хосте: определяет способ (`deployments/deploy.sh` → `make deploy` → `docker compose up -d --build`) и выполняет его через `nsenter`
+  - `backup` — бэкап и восстановление сайтов под `/opt` вместе с их БД (нужен `BACKUP_ALLOWED`)
+  - `remnawave` — управление панелью Remnawave через каталог скриптов
+  - `subscription` — разбор VPN-подписки или прокси-ссылок в markdown-отчёт
+  - `memory` — факты о команде и инфраструктуре; выдаётся только Директору
 - **Безопасные операции** (чтение: `ps`, `logs`, `stats`, `inspect`, `docker_query`) — выполняются автоматически
 - **Опасные операции** (мутации: `restart`, `stop`, `start`, `exec`, `compose up/down`, `shell_exec`) — требуют подтверждения через inline-кнопки в Telegram (таймаут 5 минут, авто-отклонение)
 - **Масштабируемость** — новая возможность = один навык (markdown-плейбук + инструменты), без правок кода и без заведения агентов
@@ -54,7 +62,7 @@ cp .env.example .env
 | `LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI-совместимый endpoint |
 | `LLM_MODEL` | `deepseek-chat` | ID модели |
 | `COMPOSE_PROJECTS_DIR` | `/opt` | Директория с compose-проектами |
-| `AGENT_MAX_ITERATIONS` | `10` | Лимит итераций LLM↔tools |
+| `AGENT_MAX_ITERATIONS` | `25` | Лимит итераций LLM↔tools |
 | `CONFIRMATION_TIMEOUT_SECONDS` | `300` | Таймаут подтверждения (сек) |
 | `AUDIT_LOG_PATH` | `/data/audit.log` | Путь к аудит-логу |
 | `DIALOG_DB_PATH` | `/data/dialog.db` | Путь к SQLite-базе диалоговой памяти |
@@ -125,57 +133,13 @@ Telegram User
 компонует `system_prompt` (роль + плейбуки навыков) и набор инструментов субагента.
 Навык `memory` в библиотеку субагентов не попадает — память только у Директора.
 
-**Поток подтверждения опасных операций:** Agent → ConfirmationGateway → Telegram inline-кнопки → пользователь → Agent (выполняет или отклоняет).
+**Поток подтверждения опасных операций:** Agent → TelegramConfirmationGateway → inline-кнопки → пользователь → Agent (выполняет или отклоняет).
 
-## Структура проекта
-
-```
-opencode_agents_system/
-├── pyproject.toml              # зависимости + конфиг pytest
-├── .env.example                # шаблон переменных окружения
-├── Dockerfile
-├── docker-compose.yml
-├── app/
-│   ├── main.py                 # сборка + startup/shutdown
-│   ├── config.py               # pydantic-settings
-│   ├── logging.py              # structlog
-│   ├── llm/
-│   │   └── client.py           # generic LLM client (один round-trip)
-│   ├── tools/
-│   │   ├── base.py             # Tool dataclass, Safety, schema gen
-│   │   └── docker.py           # низкоуровневые docker/compose/shell функции
-│   ├── skills/
-│   │   ├── loader.py           # Skill, load_skill, load_all_skills
-│   │   ├── docker/             # SKILL.md (плейбук) + tools.py (build_tools)
-│   │   ├── db/                 # read-only запросы к БД
-│   │   └── host/              # shell на хосте + firewall-плейбук
-│   ├── agents/
-│   │   ├── messages.py         # Task, Result, ConfirmationRequest
-│   │   ├── registry.py         # AgentRegistry + ConfirmationGateway
-│   │   ├── base.py             # Agent: цикл LLM↔tools
-│   │   ├── director.py         # Director + spawn (сборка временных субагентов)
-│   │   └── loader.py           # compose_prompt: роль + плейбуки навыков
-│   └── bot/
-│       ├── filters.py          # WhitelistFilter
-│       ├── keyboards.py        # approve/reject inline keyboard
-│       ├── gateway.py          # TelegramConfirmationGateway
-│       ├── handlers.py         # message→Task, callback→confirm
-│       └── bot.py              # Bot+Dispatcher assembly
-└── tests/
-    ├── conftest.py
-    ├── test_config.py
-    ├── test_llm_client.py
-    ├── test_tools_base.py
-    ├── test_tools_docker.py
-    ├── test_messages.py
-    ├── test_registry.py
-    ├── test_agent_base.py
-    ├── test_director.py
-    ├── test_sysadmin.py
-    ├── test_bot_filters.py
-    ├── test_bot_gateway.py
-    └── test_bot_handlers.py
-```
+**Доступ к хосту.** Навык объявляет `ACCESS = HostAccess(binaries=..., exec_allowed=...)`:
+какие бинарники ему доступны и вправе ли он менять состояние. При спавне доступы
+выданных навыков объединяются, и агент получает один инструмент `host_query`
+(плюс `shell_exec`, если хоть один навык это разрешает). Что считать читающей
+командой — решает общий классификатор `app/skills/readonly.py`, одинаковый для всех.
 
 ## Добавление нового skill'а
 

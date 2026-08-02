@@ -1,17 +1,9 @@
-import asyncio
-
-from app.agents.registry import AgentRegistry
-from app.agents.messages import Task, Result
-from app.skills.loader import load_skill
+from app.agents.director import Director
+from app.skills.loader import Skill, load_skill
 
 
-class FakeAgent:
-    def __init__(self, name: str, reply: str):
-        self.name = name
-        self._reply = reply
-
-    async def handle(self, task: Task) -> Result:
-        return Result(task_id=task.id, content=self._reply)
+def _skill(name: str, description: str) -> Skill:
+    return Skill(name=name, description=description, instructions="плейбук", tools=[])
 
 
 def test_skill_without_tools_py_is_a_plain_playbook(tmp_path):
@@ -26,24 +18,17 @@ def test_skill_without_tools_py_is_a_plain_playbook(tmp_path):
     assert "Пиши коротко." in skill.instructions
 
 
-async def test_registry_accepts_agent_after_start():
-    reg = AgentRegistry()
-    await reg.run_forever()
-    reg.register(FakeAgent("late", "готово"))  # появился уже на ходу, как после /reload
-    try:
-        res = await asyncio.wait_for(reg.request("late", Task(content="t")), timeout=1)
-    finally:
-        await reg.stop()
-    assert res.content == "готово"
+def test_reload_picks_up_a_new_skill():
+    d = Director(llm=None, skills={"host": _skill("host", "хост")})
+    assert "host" in d._library and "tls" not in d._library
+
+    d.reload_library({"host": _skill("host", "хост"), "tls": _skill("tls", "сертификаты")})
+
+    assert "tls" in d._library
+    assert "сертификаты" in d._base_prompt  # навык виден Директору в списке доступных
 
 
-async def test_reregistered_agent_replaces_the_old_one():
-    reg = AgentRegistry()
-    reg.register(FakeAgent("worker", "старый"))
-    await reg.run_forever()
-    reg.register(FakeAgent("worker", "новый"))
-    try:
-        res = await asyncio.wait_for(reg.request("worker", Task(content="t")), timeout=1)
-    finally:
-        await reg.stop()
-    assert res.content == "новый"
+def test_reload_keeps_memory_away_from_spawned_agents():
+    d = Director(llm=None, skills={"host": _skill("host", "хост")})
+    d.reload_library({"host": _skill("host", "хост"), "memory": _skill("memory", "факты")})
+    assert "memory" not in d._library

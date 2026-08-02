@@ -10,9 +10,10 @@ description: аудит безопасности — порты, fail2ban, ssh, 
 firewall) отдаёшь hostadmin как конкретные команды в рекомендации.
 
 Инструменты:
-- `sec_query` — read-only команда аудита на **хосте** (ss, iptables -L/-S, ufw status,
+- `host_query` — read-only команда аудита на **хосте** (ss, iptables -L/-S, ufw status,
   fail2ban-client status, sshd -T, apt list --upgradable, apt-get -s upgrade,
-  systemctl status, ls/stat).
+  systemctl status, ls/stat). Можно обернуть в `sh -c '<pipeline>'` ради пайпов
+  и циклов — тоже без подтверждения, если все команды внутри read-only.
 - `tls_check` — срок и данные TLS-сертификата эндпоинта `host:port`.
 
 ### Общие правила

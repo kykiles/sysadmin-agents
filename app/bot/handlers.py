@@ -4,12 +4,14 @@ from pathlib import Path
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, FSInputFile
-from app.agents.messages import Task, Decision
-from app.agents.registry import AgentRegistry
+from app.agents.messages import Task, Result
 from app.bot.filters import WhitelistFilter
 from app.bot.keyboards import review_markup
 from app.bot.render import render_answer, split_message
 from app.learning.review import render_review, resolve_candidate, resolve_fact, run_review
+from app.logging import get_logger
+
+log = get_logger("handlers")
 
 
 def with_quote(message: Message) -> str:
@@ -32,7 +34,7 @@ def with_quote(message: Message) -> str:
     )
 
 
-def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=None,
+def build_router(*, director, gateway=None, allowed_id: int, memory, learning=None,
                  reload_library=None) -> Router:
     router = Router()
 
@@ -104,7 +106,11 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=N
     @router.message(WhitelistFilter(allowed_id))
     async def _task(message: Message):
         task = Task(content=with_quote(message), chat_id=str(message.chat.id))
-        result = await registry.request("director", task)
+        try:
+            result = await director.handle(task)
+        except Exception as e:
+            log.exception("task_failed", task_id=task.id)
+            result = Result(task_id=task.id, content=f"error: {e}", success=False)
         if result.attachment:
             # подпись режем ДО рендера: обрезка готового HTML разорвала бы тег
             caption = split_message(result.content, limit=700)[0]
@@ -123,16 +129,11 @@ def build_router(*, registry: AgentRegistry, allowed_id: int, memory, learning=N
     @router.callback_query(F.data.startswith("cf:"))
     async def _confirm(callback: CallbackQuery):
         _, task_id, choice = callback.data.split(":")
-        from app.bot.gateway import TelegramConfirmationGateway
-        gw = registry._gateway
-        if isinstance(gw, TelegramConfirmationGateway):
-            if choice == "all":
-                gw._scoped.add(task_id)
-                gw._resolve(task_id, Decision.APPROVED)
-            elif choice == "yes":
-                gw._resolve(task_id, Decision.APPROVED)
+        if gateway is not None:
+            if choice in ("yes", "all"):
+                gateway.approve(task_id, scope_all=choice == "all")
             else:
-                gw._resolve(task_id, Decision.REJECTED)
+                gateway.reject(task_id)
         labels = {"yes": "Yes", "no": "No", "all": "Yes, and don't ask again"}
         await callback.answer(labels.get(choice, choice))
         # html_text сохраняет уже отрендеренную разметку исходного сообщения;

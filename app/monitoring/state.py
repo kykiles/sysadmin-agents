@@ -1,33 +1,23 @@
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
+
+from app.store import SqliteStore
 
 
-class MonitorState:
+class MonitorState(SqliteStore):
     """Хранит объявленное ok/fail каждой проверки и число подряд идущих провалов,
     чтобы алертить только на смену состояния (edge-triggered), не спамить после
     рестарта бота и не реагировать на одиночную аномальную выборку."""
 
-    def __init__(self, db_path: str):
-        self._path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+    SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS check_state ("
+        "name TEXT PRIMARY KEY, "
+        "ok INTEGER NOT NULL, "
+        "ts TEXT NOT NULL)",
+    )
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
-
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS check_state ("
-                "name TEXT PRIMARY KEY, "
-                "ok INTEGER NOT NULL, "
-                "ts TEXT NOT NULL)"
-            )
-            try:
-                conn.execute("ALTER TABLE check_state ADD COLUMN fails INTEGER NOT NULL DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass  # колонка уже есть — база с прошлой версии
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        self._add_column(conn, "check_state", "fails", "INTEGER NOT NULL DEFAULT 0")
 
     def load_prev(self) -> dict[str, tuple[bool, int]]:
         """name -> (объявленное состояние, число подряд идущих провалов)."""

@@ -1,33 +1,27 @@
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+
+from app.store import SqliteStore
 
 
-class DialogHistory:
+class DialogHistory(SqliteStore):
+    SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS messages ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "chat_id TEXT NOT NULL DEFAULT '', "
+        "role TEXT NOT NULL, "
+        "content TEXT NOT NULL, "
+        "ts TEXT NOT NULL)",
+    )
+
     def __init__(self, db_path: str, limit: int, token_budget: int = 4000, retention_days: int = 90):
-        self._path = db_path
         self._limit = limit
         self._token_budget = token_budget
         self._retention_days = retention_days
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        super().__init__(db_path)
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
-
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS messages ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "chat_id TEXT NOT NULL DEFAULT '', "
-                "role TEXT NOT NULL, "
-                "content TEXT NOT NULL, "
-                "ts TEXT NOT NULL)"
-            )
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
-            if "chat_id" not in cols:
-                conn.execute("ALTER TABLE messages ADD COLUMN chat_id TEXT NOT NULL DEFAULT ''")
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        self._add_column(conn, "messages", "chat_id", "TEXT NOT NULL DEFAULT ''")
 
     def append(self, chat_id: str, role: str, content: str) -> None:
         now = datetime.now(timezone.utc)

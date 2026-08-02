@@ -6,7 +6,6 @@ from pydantic import BaseModel
 
 from app.agents.director import Director
 from app.agents.messages import Task
-from app.agents.registry import AgentRegistry
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
 from app.memory.journal import TaskJournal
 from app.skills.loader import Skill
@@ -101,7 +100,7 @@ async def test_agent_trace_includes_spawned_tools(tmp_path):
             ChoiceMessage(content="42 юзера", tool_calls=None),
             ChoiceMessage(content="На инбаунде 42 юзера.", tool_calls=None),
         ]),
-        registry=AgentRegistry(),
+        
         journal=j,
         skills=_skill_with("rw_query", "rw_curl_read"),
     )
@@ -121,7 +120,7 @@ async def test_journal_failure_does_not_break_task(tmp_path):
             raise OSError("disk full")
 
     director = Director(llm=FakeLLM([ChoiceMessage(content="готово", tool_calls=None)]),
-                        registry=AgentRegistry(), journal=BrokenJournal())
+                         journal=BrokenJournal())
     res = await director.handle(Task(content="привет", chat_id="c1"))
     assert res.content == "готово"
 
@@ -137,7 +136,7 @@ async def test_accumulators_reset_between_tasks(tmp_path):
             ChoiceMessage(content="память ок", tool_calls=None),
             ChoiceMessage(content="память ок", tool_calls=None),
         ]),
-        registry=AgentRegistry(), journal=j, skills=_skill_with("host_query"),
+         journal=j, skills=_skill_with("host_query"),
     )
     await director.handle(Task(content="проверь диск", chat_id="c1"))
     await director.handle(Task(content="проверь память", chat_id="c1"))
@@ -150,5 +149,5 @@ async def test_accumulators_reset_between_tasks(tmp_path):
 
 
 def test_director_without_journal_records_nothing(tmp_path):
-    d = Director(llm=None, registry=AgentRegistry())
+    d = Director(llm=None)
     assert d._journal is None

@@ -2,7 +2,6 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand
 from app.bot.handlers import build_router
-from app.agents.registry import AgentRegistry
 from app.config import settings
 
 
@@ -23,11 +22,12 @@ async def set_bot_commands(bot: Bot) -> None:
     ])
 
 
-def create_dispatcher(*, registry: AgentRegistry, memory, learning=None,
+def create_dispatcher(*, director, gateway=None, memory, learning=None,
                       reload_library=None) -> Dispatcher:
     dp = Dispatcher()
     dp.include_router(build_router(
-        registry=registry,
+        director=director,
+        gateway=gateway,
         allowed_id=settings.telegram_user_id,
         memory=memory,
         learning=learning,

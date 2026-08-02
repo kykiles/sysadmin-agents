@@ -1,37 +1,24 @@
 """SSH как транспорт: один инструмент — одна задача (доставить команду на ноду).
 
-Классификацию read-only не дублируем — берём ту же, что у скила host: команда на
-удалённой ноде опасна ровно так же, как на локальном хосте.
+Классификация та же, что для локального хоста: команда на удалённой ноде опасна
+ровно так же. Отличие одно — на ноде нет docker-сокета, поэтому read-only
+подкоманды `docker` доступны здесь и только здесь.
 """
 import shlex
 
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.skills.host.tools import _is_simple_read_only as _host_read_only
-from app.skills.shellsafe import check_wrapped_readonly
+from app.skills.host.tools import ACCESS as _HOST_ACCESS
+from app.skills.readonly import is_read_only
 from app.tools.base import Tool, Safety
 from app.tools.docker import shell_exec
 
-# На ноде docker доступен только через ssh (сокета у нас нет), поэтому read-only
-# подкоманды docker разрешаем здесь — в скиле host их нет и быть не должно.
-_DOCKER_READONLY = {"ps", "logs", "inspect", "stats", "images", "version", "info", "top", "port", "diff"}
+_NODE_BINARIES = _HOST_ACCESS.binaries | {"docker"}
 
 
 def _is_read_only(command: list[str]) -> bool:
-    wrapped = check_wrapped_readonly(command, _is_simple_read_only)
-    if wrapped is not None:
-        return wrapped
-    return _is_simple_read_only(command)
-
-
-def _is_simple_read_only(command: list[str]) -> bool:
-    if command and command[0] == "docker":
-        subs = [a for a in command[1:] if not a.startswith("-")]
-        if subs and subs[0] == "compose":
-            subs = subs[1:]
-        return bool(subs) and subs[0] in _DOCKER_READONLY
-    return _host_read_only(command)
+    return is_read_only(command, _NODE_BINARIES)
 
 
 class SshParams(BaseModel):

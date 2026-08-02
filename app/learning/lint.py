@@ -1,9 +1,8 @@
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from app.logging import get_logger
+from app.store import SqliteStore
 
 log = get_logger("learning.lint")
 
@@ -17,30 +16,20 @@ class StaleFact:
     age_days: int
 
 
-class LintState:
+class LintState(SqliteStore):
     """Что уже показывали, чтобы не напоминать об одном и том же каждый прогон.
 
     Живёт в той же БД, что журнал задач: это оперативные данные обучения,
-    а не знания (знания — в facts.db).
+    а не сами знания (факты лежат в базе диалога, см. main.init_store).
     """
 
-    def __init__(self, db_path: str):
-        self._path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
-
-    def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS lint_seen ("
-                "scope TEXT NOT NULL, "
-                "key TEXT NOT NULL, "
-                "ts_reported TEXT NOT NULL, "
-                "PRIMARY KEY (scope, key))"
-            )
+    SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS lint_seen ("
+        "scope TEXT NOT NULL, "
+        "key TEXT NOT NULL, "
+        "ts_reported TEXT NOT NULL, "
+        "PRIMARY KEY (scope, key))",
+    )
 
     def reported_since(self, since: datetime) -> set[tuple[str, str]]:
         with self._connect() as conn:

@@ -95,3 +95,28 @@ def test_chat_ids_are_isolated(tmp_path):
     h.clear("c1")
     assert h.load("c1") == []
     assert h.load("c2") == [{"role": "user", "content": "секрет-2"}]
+
+
+def test_migrates_db_without_chat_id_column(tmp_path):
+    """База прошлой версии: таблица messages без chat_id. Данные не теряем."""
+    db = tmp_path / "dialog.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "role TEXT NOT NULL, content TEXT NOT NULL, ts TEXT NOT NULL)"
+        )
+        # метка свежая: иначе строку законно удалит чистка по retention
+        recent = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO messages (role, content, ts) VALUES ('user', 'старое', ?)", (recent,)
+        )
+
+    h = DialogHistory(db_path=str(db), limit=10)
+    h.append("42", "user", "новое")
+
+    with sqlite3.connect(db) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)")}
+        total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    assert "chat_id" in cols
+    assert total == 2
+    assert [m["content"] for m in h.load("42")] == ["новое"]
