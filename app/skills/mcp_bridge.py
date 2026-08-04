@@ -92,24 +92,25 @@ def build_tools(config: dict, safety: Safety, skill_name: str) -> list[Tool]:
     if url is None:
         log.warning("mcp_env_missing", skill=skill_name, url=config["url"])
         return []
+    # Под защитой и сборка, а не только запрос: сервер чужой, и сюрприз в его
+    # ответе не должен ронять запуск бота — навык просто останется без инструментов.
     try:
         specs = _run(asyncio.wait_for(_list_tools(url), TIMEOUT))
+        tools = []
+        for spec in specs:
+            async def fn(_name: str = spec.name, **kwargs) -> str:
+                return await asyncio.wait_for(_call_tool(url, _name, kwargs), TIMEOUT)
+
+            tools.append(Tool(
+                name=spec.name,
+                description=spec.description or spec.name,
+                params_model=AnyParams,
+                fn=fn,
+                safety=safety,
+                params_schema=spec.input_schema,
+            ))
     except Exception as e:
         log.warning("mcp_unavailable", skill=skill_name, error=f"{type(e).__name__}: {e}")
         return []
-
-    tools = []
-    for spec in specs:
-        async def fn(_name: str = spec.name, **kwargs) -> str:
-            return await asyncio.wait_for(_call_tool(url, _name, kwargs), TIMEOUT)
-
-        tools.append(Tool(
-            name=spec.name,
-            description=spec.description or spec.name,
-            params_model=AnyParams,
-            fn=fn,
-            safety=safety,
-            params_schema=spec.inputSchema,
-        ))
     log.info("mcp_tools", skill=skill_name, tools=[t.name for t in tools], safety=safety.value)
     return tools

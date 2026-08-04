@@ -33,7 +33,7 @@ async def _noop() -> dict:
 class _Spec:
     name: str
     description: str
-    inputSchema: dict  # noqa: N815 — так поле называется в протоколе MCP
+    input_schema: dict
 
 
 def _write_skill(tmp_path, body: str):
@@ -112,6 +112,13 @@ def test_missing_env_key_is_not_sent_to_server(tmp_path, monkeypatch):
     monkeypatch.setattr(mcp_bridge, "_list_tools", _spy)
     assert load_skill(_write_skill(tmp_path, FRONTMATTER)).tools == []
     assert called == []
+
+
+def test_unexpected_spec_shape_does_not_crash_startup(monkeypatch):
+    """Сервер чужой: сюрприз в его ответе должен стоить навыку инструментов, не запуска."""
+    monkeypatch.setattr(mcp_bridge, "_list_tools", _serves(object()))
+    assert mcp_bridge.build_tools({"url": "https://example.test/mcp/"},
+                                  Safety.SAFE, "search") == []
 
 
 def test_server_schema_reaches_the_model(monkeypatch):
