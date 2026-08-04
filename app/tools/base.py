@@ -31,9 +31,12 @@ class Tool:
     params_model: type[BaseModel]
     fn: Callable[..., Awaitable[Any]]
     safety: Safety = Safety.SAFE
+    # Готовая JSON-схема параметров вместо выведенной из params_model. Нужна
+    # инструментам, схему которых задаём не мы, — они приходят от MCP-сервера.
+    params_schema: dict | None = None
 
     def schema(self) -> dict:
-        parameters = self.params_model.model_json_schema()
+        parameters = self.params_schema or self.params_model.model_json_schema()
         if self.safety is Safety.DANGEROUS:
             parameters = dict(parameters)
             parameters["properties"] = {
