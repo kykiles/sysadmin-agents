@@ -54,47 +54,46 @@ def _run(coro):
 
 
 @asynccontextmanager
-async def _session(url: str, headers: dict):
+async def _session(url: str):
+    # Транспорт — streamable HTTP: в образе нет node, а значит и stdio-серверов.
+    # Авторизация идёт ключом в URL; заголовки поддержим, когда появится сервер,
+    # который иначе не умеет.
     from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.streamable_http import streamable_http_client
 
-    async with streamablehttp_client(url, headers=headers or None) as (read, write, _):
+    async with streamable_http_client(url) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             yield session
 
 
-async def _list_tools(url: str, headers: dict) -> list:
-    async with _session(url, headers) as session:
+async def _list_tools(url: str) -> list:
+    async with _session(url) as session:
         return (await session.list_tools()).tools
 
 
-async def _call_tool(url: str, headers: dict, name: str, args: dict) -> str:
-    async with _session(url, headers) as session:
+async def _call_tool(url: str, name: str, args: dict) -> str:
+    async with _session(url) as session:
         result = await session.call_tool(name, args)
     texts = [c.text for c in result.content if getattr(c, "text", None)]
     return "\n".join(texts) if texts else "(пустой ответ)"
 
 
-def _resolve(config: dict) -> tuple[str, dict] | None:
+def _resolve(config: dict) -> str | None:
     """Подставить переменные окружения. Ключи API живут в .env, не в SKILL.md."""
     url = os.path.expandvars(config["url"])
-    headers = {k: os.path.expandvars(str(v)) for k, v in (config.get("headers") or {}).items()}
-    if "$" in url or any("$" in v for v in headers.values()):
-        return None
-    return url, headers
+    return None if "$" in url else url
 
 
 def build_tools(config: dict, safety: Safety, skill_name: str) -> list[Tool]:
     """Спросить у сервера его инструменты. Недоступный сервер не должен ронять запуск —
     скилл останется плейбуком без инструментов, о чём будет запись в логе."""
-    resolved = _resolve(config)
-    if resolved is None:
+    url = _resolve(config)
+    if url is None:
         log.warning("mcp_env_missing", skill=skill_name, url=config["url"])
         return []
-    url, headers = resolved
     try:
-        specs = _run(asyncio.wait_for(_list_tools(url, headers), TIMEOUT))
+        specs = _run(asyncio.wait_for(_list_tools(url), TIMEOUT))
     except Exception as e:
         log.warning("mcp_unavailable", skill=skill_name, error=f"{type(e).__name__}: {e}")
         return []
@@ -102,7 +101,7 @@ def build_tools(config: dict, safety: Safety, skill_name: str) -> list[Tool]:
     tools = []
     for spec in specs:
         async def fn(_name: str = spec.name, **kwargs) -> str:
-            return await asyncio.wait_for(_call_tool(url, headers, _name, kwargs), TIMEOUT)
+            return await asyncio.wait_for(_call_tool(url, _name, kwargs), TIMEOUT)
 
         tools.append(Tool(
             name=spec.name,

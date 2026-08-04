@@ -82,7 +82,7 @@ def test_missing_safety_field_means_dangerous(tmp_path, monkeypatch):
 
 
 def _serves(*specs):
-    async def _list_tools(url, headers):
+    async def _list_tools(url):
         return list(specs)
 
     return _list_tools
@@ -92,7 +92,7 @@ def test_unreachable_server_leaves_playbook_without_tools(tmp_path, monkeypatch)
     """Недоступный сервер не должен ронять запуск бота."""
     monkeypatch.setenv("TEST_MCP_KEY", "k")
 
-    async def _boom(url, headers):
+    async def _boom(url):
         raise ConnectionError("нет связи")
 
     monkeypatch.setattr(mcp_bridge, "_list_tools", _boom)
@@ -105,7 +105,7 @@ def test_missing_env_key_is_not_sent_to_server(tmp_path, monkeypatch):
     monkeypatch.delenv("TEST_MCP_KEY", raising=False)
     called = []
 
-    async def _spy(url, headers):
+    async def _spy(url):
         called.append(url)
         return []
 
