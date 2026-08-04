@@ -211,6 +211,37 @@ async def test_untrusted_skill_refused_next_to_powers(skills):
     assert "spawn" in out["how"]
 
 
+async def test_untrusted_tools_run_out_of_budget():
+    """Плейбук просит не частить, слабая модель просьбу игнорирует — предел механический."""
+    from app.agents.director import _UNTRUSTED_CALL_BUDGET, _budgeted
+
+    calls = []
+
+    async def _count(**kwargs):
+        calls.append(1)
+        return {"ok": True}
+
+    tools = _budgeted([Tool("web_search", "s", _P, _count, Safety.SAFE)],
+                      _UNTRUSTED_CALL_BUDGET)
+    outs = [await tools[0].execute({}) for _ in range(_UNTRUSTED_CALL_BUDGET + 2)]
+
+    assert len(calls) == _UNTRUSTED_CALL_BUDGET
+    assert "бюджет вызовов исчерпан" in outs[-1]
+    assert "бюджет" not in outs[0]
+
+
+async def test_budget_is_per_spawn_not_global():
+    from app.agents.director import _budgeted
+
+    async def _ok(**kwargs):
+        return {"ok": True}
+
+    first = _budgeted([Tool("web_search", "s", _P, _ok, Safety.SAFE)], 1)
+    second = _budgeted([Tool("web_search", "s", _P, _ok, Safety.SAFE)], 1)
+    await first[0].execute({})
+    assert "бюджет" not in await second[0].execute({})
+
+
 async def test_untrusted_skill_allowed_with_harmless_neighbour():
     out = await _spawn_result(["search", "notes"])
     assert "error" not in out

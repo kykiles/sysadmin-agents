@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from functools import reduce
 from operator import or_
 
@@ -91,6 +92,34 @@ def build_director_prompt(available_skills: dict[str, str] | None = None,
 # библиотеки, поэтому фильтрация библиотеки его не затрагивает.
 _DIRECTOR_ONLY = {"memory"}
 
+# Сколько раз агент может дёрнуть инструменты недоверенного скила за одну задачу.
+# Просьба в плейбуке («два поиска и одно извлечение») слабой моделью игнорируется —
+# живой поиск делал по восемь запросов и пять извлечений, и время уходило не в сеть,
+# а в генерации поверх раздутого контекста. Здесь предел механический.
+# ponytail: одна константа на все такие скилы; в настройки, если понадобится крутить
+# без пересборки
+_UNTRUSTED_CALL_BUDGET = 6
+
+
+def _budgeted(tools: list[Tool], limit: int) -> list[Tool]:
+    """Обернуть инструменты общим счётчиком вызовов. Счётчик живёт в замыкании,
+    поэтому у каждого спавна он свой."""
+    left = limit
+
+    def wrap(tool: Tool) -> Tool:
+        async def fn(**kwargs):
+            nonlocal left
+            if left <= 0:
+                return {"error": (
+                    f"бюджет вызовов исчерпан ({limit}) — отвечай тем, что уже собрал"
+                )}
+            left -= 1
+            return await tool.fn(**kwargs)
+
+        return replace(tool, fn=fn)
+
+    return [wrap(t) for t in tools]
+
 
 def _spawnable(skills: dict) -> dict:
     return {n: s for n, s in skills.items() if n not in _DIRECTOR_ONLY}
@@ -156,7 +185,11 @@ class Director(Agent):
                 }
             # Навыки пересекаются по инструментам (docker+observe → docker_ps и др.),
             # а шлюз на дубль имени в tools отвечает 400. Первый выигрывает.
-            uniq = {t.name: t for s in chosen for t in s.tools}
+            uniq = {
+                t.name: t
+                for s in chosen
+                for t in (_budgeted(s.tools, _UNTRUSTED_CALL_BUDGET) if s.untrusted else s.tools)
+            }
             for t in build_host_tools(access):
                 uniq.setdefault(t.name, t)
             sub = Agent(
