@@ -151,3 +151,83 @@ async def test_accumulators_reset_between_tasks(tmp_path):
 def test_director_without_journal_records_nothing(tmp_path):
     d = Director(llm=None)
     assert d._journal is None
+    assert [t.name for t in d.tools if t.name == "recall_experience"] == []
+
+
+def test_search_ranks_by_relevance_and_hides_trace(tmp_path):
+    j = _journal(tmp_path)
+    j.record(task_id="t1", chat_id="c1", intent="сколько юзеров на инбаунде",
+             agents=["spawned:remnawave+observe"], tool_seq=["spawn", "rw_query"],
+             iterations=3, success=True, summary="На инбаунде 42 юзера.")
+    j.record(task_id="t2", chat_id="c1", intent="проверь свободное место на диске",
+             agents=["spawned:host"], tool_seq=["spawn", "host_query"],
+             iterations=2, success=True, summary="Диск занят на 61%.")
+
+    found = j.search("посчитай пользователей инбаунда")
+    assert found[0]["intent"] == "сколько юзеров на инбаунде"
+    assert found[0]["summary"] == "На инбаунде 42 юзера."
+    assert found[0]["skills"] == ["observe", "remnawave"]
+    assert found[0]["success"] is True
+    assert "tool_seq" not in found[0]
+
+
+def test_search_returns_nothing_on_empty_or_symbol_query(tmp_path):
+    j = _journal(tmp_path)
+    j.record(task_id="t1", chat_id="c1", intent="перезапусти nginx", agents=[],
+             tool_seq=[], iterations=1, success=True, summary="Перезапущен.")
+    # пользовательский текст не должен доезжать до FTS как синтаксис
+    assert j.search("") == []
+    assert j.search('" NEAR ^') == []
+    assert j.search('nginx "') != []
+
+
+def test_search_keeps_failures(tmp_path):
+    j = _journal(tmp_path)
+    j.record(task_id="t1", chat_id="c1", intent="подними контейнер panel", agents=[],
+             tool_seq=[], iterations=9, success=False, summary="Не поднялся: порт занят.")
+    assert j.search("контейнер panel")[0]["success"] is False
+
+
+def test_record_replaces_index_entry(tmp_path):
+    j = _journal(tmp_path)
+    j.record(task_id="t1", chat_id="c1", intent="проверь tls", agents=[],
+             tool_seq=[], iterations=1, success=True, summary="первый итог")
+    j.record(task_id="t1", chat_id="c1", intent="проверь tls", agents=[],
+             tool_seq=[], iterations=1, success=True, summary="второй итог")
+    found = j.search("tls")
+    assert len(found) == 1
+    assert found[0]["summary"] == "второй итог"
+
+
+def test_old_journal_gets_summary_column(tmp_path):
+    """База, созданная прошлой версией, догоняется без потери записей."""
+    path = str(tmp_path / "tasks.db")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, ts TEXT NOT NULL, chat_id TEXT, "
+            "intent TEXT NOT NULL, agent TEXT, tool_seq TEXT, iterations INTEGER, "
+            "success INTEGER, reviewed INTEGER DEFAULT 0)"
+        )
+        conn.execute(
+            "INSERT INTO tasks (id, ts, chat_id, intent, agent, tool_seq, iterations, success) "
+            "VALUES ('old', ?, 'c1', 'старое', '', '[]', 1, 1)",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+    j = TaskJournal(path)
+    assert [r["id"] for r in j.recent(hours=1)] == ["old"]
+    j.record(task_id="new", chat_id="c1", intent="новое", agents=[], tool_seq=[],
+             iterations=1, success=True, summary="итог")
+    assert j.search("новое")[0]["summary"] == "итог"
+
+
+async def test_director_writes_first_line_as_summary(tmp_path):
+    j = _journal(tmp_path)
+    director = Director(
+        llm=FakeLLM([ChoiceMessage(
+            content="На инбаунде 42 юзера.\n\n> нода: `node-3`\n> статус: `online`",
+            tool_calls=None,
+        )]),
+        journal=j,
+    )
+    await director.handle(Task(content="сколько юзеров на инбаунде", chat_id="c1"))
+    assert j.search("юзеров инбаунд")[0]["summary"] == "На инбаунде 42 юзера."
