@@ -23,6 +23,9 @@ from app.tools.base import Safety, Tool
 log = get_logger("mcp")
 
 TIMEOUT = 30
+# ponytail: одна константа на все серверы; вынести в frontmatter, если появится
+# сервер, которому нужен другой потолок
+MAX_RESULT_CHARS = 6000
 
 
 class AnyParams(BaseModel):
@@ -76,7 +79,15 @@ async def _call_tool(url: str, name: str, args: dict) -> str:
     async with _session(url) as session:
         result = await session.call_tool(name, args)
     texts = [c.text for c in result.content if getattr(c, "text", None)]
-    return "\n".join(texts) if texts else "(пустой ответ)"
+    if not texts:
+        return "(пустой ответ)"
+    out = "\n".join(texts)
+    if len(out) > MAX_RESULT_CHARS:
+        # Извлечение страницы возвращает её целиком, и через несколько вызовов
+        # контекст агента раздувается так, что каждая следующая генерация модели
+        # идёт десятками секунд. Потолок на вызов дешевле любых оптимизаций.
+        out = out[:MAX_RESULT_CHARS] + "\n…ответ обрезан, уточни запрос или возьми другой источник"
+    return out
 
 
 def _resolve(config: dict) -> str | None:

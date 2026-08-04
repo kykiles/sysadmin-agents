@@ -1,4 +1,5 @@
 import json
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import pytest
@@ -112,6 +113,25 @@ def test_missing_env_key_is_not_sent_to_server(tmp_path, monkeypatch):
     monkeypatch.setattr(mcp_bridge, "_list_tools", _spy)
     assert load_skill(_write_skill(tmp_path, FRONTMATTER)).tools == []
     assert called == []
+
+
+async def test_huge_answer_is_capped(monkeypatch):
+    """Страница целиком в контексте агента стоит десятков секунд на каждой генерации."""
+    class _Chunk:
+        text = "ы" * 50_000
+
+    class _Session:
+        async def call_tool(self, name, args):
+            return type("R", (), {"content": [_Chunk()]})()
+
+    @asynccontextmanager
+    async def _fake(url):
+        yield _Session()
+
+    monkeypatch.setattr(mcp_bridge, "_session", _fake)
+    out = await mcp_bridge._call_tool("https://example.test/mcp/", "tavily_extract", {})
+    assert len(out) < mcp_bridge.MAX_RESULT_CHARS + 200
+    assert out.endswith("другой источник")
 
 
 def test_unexpected_spec_shape_does_not_crash_startup(monkeypatch):
