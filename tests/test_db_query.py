@@ -60,3 +60,15 @@ def test_tool_stays_safe():
     (tool,) = build_tools()
     assert tool.name == "docker_query"
     assert tool.safety is Safety.SAFE
+
+
+def test_psql_list_databases_allowed():
+    """Без этого агент угадывал имя БД вместо того, чтобы перечислить базы."""
+    assert _is_read_only(["psql", "-U", "postgres", "-l"])
+    assert _is_read_only(["psql", "-U", "postgres", "--list"])
+
+
+def test_listing_flag_does_not_smuggle_writes():
+    assert not _is_read_only(["psql", "-l", "-c", "DROP TABLE users"])
+    assert not _is_read_only(["psql", "-l", "-f", "/tmp/evil.sql"])
+    assert not _is_read_only(["mysql", "-l"])

@@ -18,6 +18,9 @@ _QUERY_FLAGS = {"-c", "--command", "-e", "--execute"}
 # Флаги, исполняющие произвольный файл: содержимое мы не видим — отказ.
 _FILE_FLAGS = {"-f", "--file", "--init", "-init"}
 
+# psql: перечисление баз, запроса в argv нет, но читающее.
+_LISTING_FLAGS = {"-l", "--list"}
+
 # Записывающие SQL-глаголы. Ищем как отдельные слова в любом месте запроса:
 # подзапрос и CTE тоже могут менять данные.
 _WRITE_SQL = re.compile(
@@ -60,9 +63,16 @@ def _queries(args: list[str]) -> list[str] | None:
 def _is_read_only(command: list[str]) -> bool:
     if not command or command[0] not in _CLIENTS:
         return False
-    qs = _queries(command[1:])
+    args = command[1:]
+    qs = _queries(args)
     if qs is None:
-        return False
+        # `psql -l` перечисляет базы, но SQL-текста в argv нет — раньше это был
+        # отказ, и агенту приходилось угадывать имя БД вместо того, чтобы спросить.
+        return (
+            command[0] == "psql"
+            and any(a in _LISTING_FLAGS for a in args)
+            and not any(a in _FILE_FLAGS for a in args)
+        )
     return not any(_WRITE_SQL.search(q) or _ESCAPES.search(q) for q in qs)
 
 
