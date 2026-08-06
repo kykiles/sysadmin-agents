@@ -242,3 +242,18 @@ async def test_unparsable_args_reported_to_llm():
     res = await agent.handle(Task(content="x"))
     assert res.success is True
     assert "invalid tool arguments" in llm.last_messages[-1]["content"]
+
+
+async def test_reasoning_content_returned_to_model():
+    """Thinking-модель отвечает 400, если её размышления не вернуть в истории."""
+    tool = make_tool()
+    tc = ChoiceMessage(
+        content=None,
+        tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="echo", arguments=json.dumps({"x": "hi"})))],
+        reasoning_content="думаю",
+    )
+    llm = FakeLLM([tc, ChoiceMessage(content="ok", tool_calls=None)])
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm)
+    await agent.handle(Task(content="do it"))
+    assistant = next(m for m in llm.last_messages if m["role"] == "assistant")
+    assert assistant["reasoning_content"] == "думаю"

@@ -112,7 +112,7 @@ class Agent:
                     await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", msg.content or "")
                 return Result(task_id=task.id, content=msg.content or "",
                               trace=trace, iterations=iterations)
-            messages.append({
+            assistant: dict = {
                 "role": "assistant",
                 "content": msg.content,
                 "tool_calls": [
@@ -120,7 +120,11 @@ class Agent:
                      "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
                     for tc in msg.tool_calls
                 ],
-            })
+            }
+            # Без возврата размышлений thinking-модель отвечает 400 на следующий шаг.
+            if msg.reasoning_content:
+                assistant["reasoning_content"] = msg.reasoning_content
+            messages.append(assistant)
             # Безопасные вызовы идут пачкой параллельно (несколько spawn —
             # это несколько агентов одновременно), DANGEROUS — по одному,
             # иначе подтверждения в Telegram столкнутся. Порядок ответов сохраняется.

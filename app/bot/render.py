@@ -97,11 +97,29 @@ def _format_command(tool_name: str, args: dict) -> str:
     return tool_name
 
 
+# Лимит сообщения Telegram 4096; агенты шлют на подтверждение простыни на пару
+# килобайт, и целиком они не влезают вместе с заголовком и причиной.
+_COMMAND_LIMIT = 3000
+
+
+def _command_block(tool_name: str, args: dict) -> str:
+    command = _format_command(tool_name, args)
+    if len(command) > _COMMAND_LIMIT:
+        command = command[:_COMMAND_LIMIT] + " …(обрезано)"
+    return f"<blockquote expandable>{html.escape(command)}</blockquote>"
+
+
 def format_confirmation(req: ConfirmationRequest) -> str:
     lines = ["<b>Требуется подтверждение</b>"]
     reason = (req.reason or "").strip()
     if reason:
         lines.append(html.escape(reason))
-    command = html.escape(_format_command(req.tool_name, req.args))
-    lines.append(f"<blockquote expandable>{command}</blockquote>")
+    lines.append(_command_block(req.tool_name, req.args))
     return "\n\n".join(lines)
+
+
+def format_auto_approved(req: ConfirmationRequest) -> str:
+    return "\n\n".join([
+        "<b>Авто-одобрено</b>",
+        _command_block(req.tool_name, req.args),
+    ])

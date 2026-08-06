@@ -187,3 +187,10 @@ async def test_host_query_rejects_and_runs(monkeypatch):
 
     ok = await query.fn(command=["df", "-h"])
     assert ok["returncode"] == 0
+
+
+def test_docker_skill_allows_reading_logs_via_host():
+    """Агрегация логов (docker logs | grep -c) уходила в отказ — docker не был в binaries."""
+    from app.skills.docker.tools import ACCESS
+    assert is_read_only(["sh", "-c", "docker logs --tail 100 x 2>&1 | grep -c error"], ACCESS.binaries)
+    assert not is_read_only(["docker", "rm", "-f", "x"], ACCESS.binaries)

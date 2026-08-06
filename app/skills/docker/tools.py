@@ -1,3 +1,4 @@
+from app.skills.readonly import HostAccess
 from app.tools.base import Tool, Safety
 from app.tools.docker import (
     docker_ps, docker_logs, docker_stats, docker_inspect,
@@ -5,6 +6,11 @@ from app.tools.docker import (
     compose_ls, compose_ps, compose_up, compose_down,
     NoParams, LogsParams, ContainerParams, ExecParams, ProjectParams,
 )
+
+
+# Инструменты выше отдают логи целиком; агрегировать их (grep -c по 5000 строк)
+# агент всё равно идёт в host_query, поэтому читающий `docker` разрешён и там.
+ACCESS = HostAccess(binaries=frozenset({"docker"}))
 
 
 def build_tools() -> list[Tool]:

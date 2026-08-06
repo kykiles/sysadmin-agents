@@ -19,6 +19,9 @@ class ToolCall:
 class ChoiceMessage:
     content: str | None
     tool_calls: list[ToolCall] | None
+    # Thinking-модели требуют вернуть свои размышления обратно в истории, иначе
+    # апстрим отвечает 400. Поле нестандартное — в SDK его нет, только в extra.
+    reasoning_content: str | None = None
 
 
 class LLMClient:
@@ -53,4 +56,8 @@ class LLMClient:
                     name=tc.function.name, arguments=tc.function.arguments))
                 for tc in m.tool_calls
             ]
-        return ChoiceMessage(content=m.content, tool_calls=tool_calls)
+        return ChoiceMessage(
+            content=m.content,
+            tool_calls=tool_calls,
+            reasoning_content=getattr(m, "reasoning_content", None),
+        )

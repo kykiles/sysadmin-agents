@@ -2,7 +2,7 @@ import asyncio
 from aiogram import Bot
 from app.agents.messages import ConfirmationRequest, Decision
 from app.bot.keyboards import approve_keyboard
-from app.bot.render import format_confirmation
+from app.bot.render import format_auto_approved, format_confirmation
 from app.config import settings
 
 
@@ -40,9 +40,7 @@ class TelegramConfirmationGateway:
 
     async def request(self, req: ConfirmationRequest) -> Decision:
         if req.task_id in self._scoped:
-            await self._bot.send_message(
-                self._chat_id, f"Авто-одобрено: {req.tool_name} {req.args}"
-            )
+            await self._bot.send_message(self._chat_id, format_auto_approved(req))
             return Decision.AUTO_APPROVED
         fut = asyncio.get_running_loop().create_future()
         self._pending[req.task_id] = fut

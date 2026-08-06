@@ -1,4 +1,7 @@
-from app.bot.render import render_answer, split_message
+from app.agents.messages import ConfirmationRequest
+from app.bot.render import (
+    format_auto_approved, format_confirmation, render_answer, split_message,
+)
 
 
 def test_plain_text_passes_through():
@@ -92,3 +95,19 @@ def test_worst_case_escape_stays_under_limit():
 def test_split_preserves_content():
     text = "\n".join(f"нода {i}: `10.0.0.{i}`" for i in range(500))
     assert "\n".join(split_message(text)) == text
+
+
+def test_auto_approved_escapes_command():
+    """Сырой shell-скрипт в тексте ломал HTML-парсер Telegram, и сообщение не уходило."""
+    req = ConfirmationRequest(task_id="t", tool_name="shell_exec",
+                              args={"command": ["sh", "-c", 'echo > "$C"; a<b']},
+                              description="d", reason="r")
+    out = format_auto_approved(req)
+    assert "&quot;$C&quot;" in out and "a&lt;b" in out
+
+
+def test_long_command_is_truncated():
+    req = ConfirmationRequest(task_id="t", tool_name="shell_exec",
+                              args={"command": ["sh", "-c", "x" * 9000]},
+                              description="d", reason="r")
+    assert len(format_confirmation(req)) < 4096
