@@ -2,7 +2,7 @@
 
 Классификация read-only переехала в test_readonly.py.
 """
-from app.skills.security.tools import tls_check, build_tools
+from skills.security.tools import tls_check, build_tools
 from app.tools.base import Safety
 
 
@@ -12,7 +12,7 @@ async def test_tls_check_validates_endpoint():
 
 
 async def test_tls_check_builds_openssl(monkeypatch):
-    import app.skills.security.tools as st
+    import skills.security.tools as st
     captured = {}
 
     async def fake_host_shell(script):

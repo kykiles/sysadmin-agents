@@ -9,7 +9,7 @@ import shlex
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.skills.host.tools import ACCESS as _HOST_ACCESS
+from skills.host.tools import ACCESS as _HOST_ACCESS
 from app.skills.readonly import is_read_only
 from app.tools.base import Tool, Safety
 from app.tools.docker import shell_exec

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import app.skills.remnawave.tools as rt
+import skills.remnawave.tools as rt
 from app.tools.base import Safety
 
 

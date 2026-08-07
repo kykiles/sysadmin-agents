@@ -1,4 +1,4 @@
-from app.skills.db.tools import _is_read_only, docker_query, build_tools
+from skills.db.tools import _is_read_only, docker_query, build_tools
 from app.tools.base import Safety
 
 
@@ -46,7 +46,7 @@ async def test_docker_query_rejects_write():
 
 
 async def test_docker_query_runs_via_docker_exec(monkeypatch):
-    import app.skills.db.tools as dt
+    import skills.db.tools as dt
 
     async def fake_docker_exec(container, command):
         return {"container": container, "command": command, "output": "1", "exit_code": 0}

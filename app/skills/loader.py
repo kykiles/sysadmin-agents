@@ -49,7 +49,10 @@ def load_skill(skill_dir: Path) -> Skill:
     # других скиллов (например «как писать пост» поверх shell'а). А если есть —
     # он даёт свои инструменты, доступ к хосту (ACCESS) или и то, и другое.
     if (skill_dir / "tools.py").exists():
-        mod = importlib.import_module(f"app.skills.{skill_dir.name}.tools")
+        # Скилы лежат вне пакета ядра (корневой skills/) — домен не должен быть частью
+        # app/. Имя пакета берём из каталога, который нам дали: так загрузчик не знает
+        # заранее, где живёт библиотека.
+        mod = importlib.import_module(f"{skill_dir.parent.name}.{skill_dir.name}.tools")
         access = getattr(mod, "ACCESS", access)
         if hasattr(mod, "build_tools"):
             tools = mod.build_tools()

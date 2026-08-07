@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.tools.docker import host_exec, docker_ps
-from app.skills.security.tools import tls_check
-from app.skills.remnawave.tools import _run_script
+from skills.security.tools import tls_check
+from skills.remnawave.tools import _run_script
 
 
 @dataclass

@@ -1,6 +1,6 @@
 import pytest
 
-from app.skills.ssh.tools import _is_read_only, _ssh_argv, ssh_query, build_tools
+from skills.ssh.tools import _is_read_only, _ssh_argv, ssh_query, build_tools
 from app.tools.base import Safety
 
 

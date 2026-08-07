@@ -73,7 +73,7 @@ async def test_execute_returns_error_instead_of_raising():
 
 def test_host_tools_run_on_host_not_in_container():
     from app.tools.docker import host_exec
-    from app.skills.host.tools import ACCESS
+    from skills.host.tools import ACCESS
     from app.skills.readonly import build_host_tools
 
     by_name = {t.name: t.fn for t in build_host_tools(ACCESS)}

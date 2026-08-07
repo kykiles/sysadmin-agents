@@ -25,9 +25,11 @@ async def main() -> None:
         base_url=settings.llm_base_url,
         model=settings.llm_model,
     )
-    app_dir = Path(__file__).parent
+    # Библиотека скилов лежит рядом с пакетом, а не внутри него: ядро не знает,
+    # из какой предметной области будут задачи.
+    skills_dir = Path(__file__).resolve().parent.parent / "skills"
     init_store(settings.dialog_db_path)
-    skills = load_all_skills(app_dir / "skills")
+    skills = load_all_skills(skills_dir)
     history = DialogHistory(
         db_path=settings.dialog_db_path,
         limit=settings.dialog_history_limit,
@@ -42,13 +44,13 @@ async def main() -> None:
     bot = create_bot()
     gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)
     director = Director(llm=llm, gateway=gateway, memory=history, journal=journal,
-                        skills=skills, skills_dir=app_dir / "skills")
+                        skills=skills, skills_dir=skills_dir)
 
     def reload_library() -> str:
         """Перечитать skills/ без рестарта. Новые скиллы подхватываются сразу;
         изменённый tools.py уже импортированного скилла — нет
         (ponytail: importlib.reload, если понадобится править инструменты на живую)."""
-        new_skills = load_all_skills(app_dir / "skills")
+        new_skills = load_all_skills(skills_dir)
         director.reload_library(new_skills)
         return f"навыков: {len(new_skills)}"
 

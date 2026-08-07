@@ -8,7 +8,7 @@ from app.tools.base import Tool, Safety
 from app.tools.docker import NoParams, host_shell
 # tls_check реализован в security-скиле — переиспользуем, чтобы не дублировать
 # логику построения openssl-команды и валидацию эндпоинта.
-from app.skills.security.tools import tls_check, TlsParams
+from skills.security.tools import tls_check, TlsParams
 
 ACCESS = HostAccess(
     binaries=frozenset({

@@ -2,7 +2,7 @@ import asyncio
 
 from pydantic import BaseModel, Field
 
-from app.skills.subscription import analyze
+from skills.subscription import analyze
 from app.tools.base import Tool, Safety
 
 

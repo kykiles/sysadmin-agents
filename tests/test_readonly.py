@@ -5,13 +5,13 @@
 """
 import pytest
 
-from app.skills.host.tools import ACCESS as HOST
-from app.skills.observe.tools import ACCESS as OBSERVE
+from skills.host.tools import ACCESS as HOST
+from skills.observe.tools import ACCESS as OBSERVE
 from app.skills.readonly import (
     HostAccess, KNOWN_BINARIES, build_host_tools, is_read_only,
 )
-from app.skills.security.tools import ACCESS as SECURITY
-from app.skills.tls.tools import ACCESS as TLS
+from skills.security.tools import ACCESS as SECURITY
+from skills.tls.tools import ACCESS as TLS
 from app.tools.base import Safety
 
 ALL = KNOWN_BINARIES
@@ -191,6 +191,6 @@ async def test_host_query_rejects_and_runs(monkeypatch):
 
 def test_docker_skill_allows_reading_logs_via_host():
     """Агрегация логов (docker logs | grep -c) уходила в отказ — docker не был в binaries."""
-    from app.skills.docker.tools import ACCESS
+    from skills.docker.tools import ACCESS
     assert is_read_only(["sh", "-c", "docker logs --tail 100 x 2>&1 | grep -c error"], ACCESS.binaries)
     assert not is_read_only(["docker", "rm", "-f", "x"], ACCESS.binaries)

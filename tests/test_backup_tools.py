@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import app.skills.backup.tools as bt
+import skills.backup.tools as bt
 from app.tools.base import Safety
 
 

@@ -26,9 +26,3 @@ def test_reload_picks_up_a_new_skill():
 
     assert "tls" in d._library
     assert "сертификаты" in d._base_prompt  # навык виден Директору в списке доступных
-
-
-def test_reload_keeps_memory_away_from_spawned_agents():
-    d = Director(llm=None, skills={"host": _skill("host", "хост")})
-    d.reload_library({"host": _skill("host", "хост"), "memory": _skill("memory", "факты")})
-    assert "memory" not in d._library

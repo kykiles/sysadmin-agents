@@ -144,7 +144,7 @@ Telegram User
 ## Добавление нового skill'а
 
 ```
-app/skills/<skill_name>/
+skills/<skill_name>/
 ├── SKILL.md      # фронтматтер (name, description) + markdown-плейбук
 └── tools.py      # build_tools() -> list[Tool]
 ```

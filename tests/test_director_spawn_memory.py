@@ -1,6 +1,6 @@
 import json
 
-from app.agents.director import Director, _memory_index, _spawnable
+from app.agents.director import Director, _memory_index
 from app.agents.messages import Task
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
 from app.memory import facts
@@ -91,24 +91,22 @@ async def test_spawn_rejects_unknown_skill(tmp_path):
     assert d._agents_used == []
 
 
-async def test_memory_skill_is_not_spawnable(tmp_path):
+async def test_spawned_agents_never_get_memory_tools(tmp_path):
+    """Память принадлежит Директору. Держится не фильтром библиотеки, а тем, что
+    инструменты памяти приходят из ядра и в скилах их нет вовсе."""
     facts.init_store(str(tmp_path / "f.db"))
-    lib = _skill()
-    lib["memory"] = Skill(name="memory", description="память", instructions="## память", tools=[])
-    # память есть в библиотеке, но директор не должен раздавать её спавнутым агентам
-    assert "memory" not in _spawnable(lib)
-
     llm = FakeLLM([
-        _call("spawn", {"role": "х", "skills": ["memory"], "task": "запомни"}),
-        ChoiceMessage(content="памяти у агентов нет", tool_calls=None),
+        _call("spawn", {"role": "х", "skills": ["writer"], "task": "запомни хост"}),
+        ChoiceMessage(content="сделал", tool_calls=None),   # ответ спавнутого агента
+        ChoiceMessage(content="готово", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=lib)
+    d = Director(llm=llm, skills=_skill())
     await d.handle(Task(content="сделай"))
 
-    tool_reply = json.loads(llm.seen[1][-1]["content"])
-    assert "memory" in tool_reply["error"]
-    assert "memory" not in tool_reply["available"]
-    assert d._agents_used == []
+    memory_tools = {"recall_facts", "remember_fact"}
+    assert memory_tools <= {t.name for t in d.tools}
+    # второй вызов LLM — это спавнутый агент со своим набором инструментов
+    assert not memory_tools & {t["function"]["name"] for t in llm.seen_tools[1]}
 
 
 def test_memory_index_lists_scopes_not_facts(tmp_path):
@@ -130,8 +128,8 @@ async def test_spawned_agent_gets_one_host_query_with_union_scope(tmp_path):
     Раньше это были два инструмента с разными именами; после унификации имени
     коллизия в uniq молча оставила бы скоуп только первого навыка.
     """
-    from app.skills.security.tools import ACCESS as SEC
-    from app.skills.tls.tools import ACCESS as TLS
+    from skills.security.tools import ACCESS as SEC
+    from skills.tls.tools import ACCESS as TLS
 
     facts.init_store(str(tmp_path / "f.db"))
     lib = {

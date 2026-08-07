@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Проверка парсера ссылок. Запуск: python3 test_parse.py"""
 import base64, json
-from app.skills.subscription.analyze import parse_link, to_links, flag_cc
+from skills.subscription.analyze import parse_link, to_links, flag_cc
 
 
 def b64(s):
@@ -67,7 +67,7 @@ print("ok  мусор")
 
 
 # render: секция «Вывод», сверка флага с ASN, кликабельный ASN
-from app.skills.subscription.analyze import render
+from skills.subscription.analyze import render
 
 srv = [{"proto": "vless", "host": "a.example.com", "port": 443, "sec": "reality",
         "net": "tcp", "tag": "🇫🇮 FI-1", "sni": "x", "fp": "", "pbk": "", "flow": "",

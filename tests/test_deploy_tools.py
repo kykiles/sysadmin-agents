@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-import app.skills.deploy.tools as dt
+import skills.deploy.tools as dt
 from app.tools.base import Safety
 
 

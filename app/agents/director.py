@@ -16,7 +16,7 @@ from app.llm.client import LLMClient
 from app.logging import get_logger
 from app.memory.facts import get_store
 from app.skills.loader import load_all_skills
-from app.skills.memory.tools import build_tools as memory_tools
+from app.memory.tools import build_tools as memory_tools
 from app.skills.readonly import HostAccess, build_host_tools
 from app.tools.base import Tool, Safety
 
@@ -125,11 +125,6 @@ def build_director_prompt(available_skills: dict[str, str] | None = None,
     )
 
 
-# Память — зона ответственности только директора: эти навыки не раздаём спавнутым
-# агентам. Свои инструменты памяти директор берёт из memory_tools() напрямую, не из
-# библиотеки, поэтому фильтрация библиотеки его не затрагивает.
-_DIRECTOR_ONLY = {"memory"}
-
 # Сколько раз агент может дёрнуть инструменты недоверенного скила за одну задачу.
 # Просьба в плейбуке («два поиска и одно извлечение») слабой моделью игнорируется —
 # живой поиск делал по восемь запросов и пять извлечений, и время уходило не в сеть,
@@ -157,10 +152,6 @@ def _budgeted(tools: list[Tool], limit: int) -> list[Tool]:
         return replace(tool, fn=fn)
 
     return [wrap(t) for t in tools]
-
-
-def _spawnable(skills: dict) -> dict:
-    return {n: s for n, s in skills.items() if n not in _DIRECTOR_ONLY}
 
 
 def _memory_index() -> str:
@@ -196,7 +187,7 @@ class Director(Agent):
             self._report_path = path
             return {"saved": path, "note": "файл будет отправлен пользователю"}
 
-        library = _spawnable(skills or {})
+        library = skills or {}
 
         async def _spawn(role: str, skills: list[str], task: str) -> dict:
             # библиотеку читаем с инстанса — /reload подменяет её на ходу
@@ -294,8 +285,9 @@ class Director(Agent):
         )
         # Инструменты памяти берём из skill'а memory — те же, что у специалистов;
         # Директору нужны только чтение и запись, забывать факты — не его дело.
-        mem_tools = [t for t in memory_tools() if t.name in ("recall_facts", "remember_fact")]
-        tools = [report_tool, *mem_tools]
+        # Память принадлежит Директору: инструменты приходят из ядра, а не из
+        # библиотеки скилов, поэтому выдать их спавнутому агенту нечем.
+        tools = [report_tool, *memory_tools()]
         if library:
             tools.append(spawn_tool)
         if skills_dir is not None:
@@ -349,7 +341,7 @@ class Director(Agent):
 
     def reload_library(self, skills: dict) -> None:
         """Подхватить обновлённые навыки без рестарта процесса."""
-        self._library = _spawnable(skills)
+        self._library = skills
         self._base_prompt = build_director_prompt(
             {n: s.description for n, s in self._library.items()},
             with_experience=self._journal is not None,

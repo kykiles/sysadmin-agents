@@ -1,11 +1,11 @@
 from pathlib import Path
 
 from app.skills.loader import parse_frontmatter, Skill, load_skill, load_all_skills
-from app.skills.docker.tools import build_tools as build_docker_tools
+from skills.docker.tools import build_tools as build_docker_tools
 from app.tools.base import Safety
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILLS_DIR = ROOT / "app" / "skills"
+SKILLS_DIR = ROOT / "skills"
 
 
 def test_parse_frontmatter_extracts_meta_and_body():
