@@ -93,3 +93,23 @@ def test_persists_across_instances(tmp_path):
     assert KnowledgeStore(db_path=path).recall() == [
         {"scope": "global", "key": "k", "value": "v", "kind": "stable"}
     ]
+
+
+# ---------- метка недоверенного источника ----------
+
+def test_tainted_facts_are_flagged_and_listed(tmp_path):
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("net", "asn", "AS123", tainted=True)
+    store.remember("host", "ssh_port", "22")
+
+    assert [f["key"] for f in store.tainted()] == ["asn"]
+
+
+def test_confirming_a_tainted_fact_clears_the_flag(tmp_path):
+    """Тот же факт, записанный заново в чистой задаче, — уже подтверждённый."""
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("net", "asn", "AS123", tainted=True)
+
+    store.remember("net", "asn", "AS123")
+
+    assert store.tainted() == []

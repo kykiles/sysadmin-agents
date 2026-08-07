@@ -5,9 +5,9 @@ def review_markup(outcome) -> InlineKeyboardMarkup:
     """Кнопки к сводке самопроверки."""
     from app.learning.review import short_id
 
-    return _review_keyboard(
-        [(short_id(f.scope, f.key), f"{f.scope}/{f.key}"[:24]) for f in outcome.stale],
-    )
+    facts = [(f.scope, f.key) for f in outcome.stale]
+    facts += [(f["scope"], f["key"]) for f in outcome.tainted if (f["scope"], f["key"]) not in facts]
+    return _review_keyboard([(short_id(s, k), f"{s}/{k}"[:24]) for s, k in facts])
 
 
 def _review_keyboard(fact_ids: list[tuple[str, str]]) -> InlineKeyboardMarkup:

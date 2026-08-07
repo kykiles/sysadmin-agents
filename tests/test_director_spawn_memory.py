@@ -165,3 +165,33 @@ async def test_spawned_agent_without_host_skills_gets_no_host_query(tmp_path):
 
     sub_tools = {t["function"]["name"] for t in llm.seen_tools[1]}
     assert sub_tools == {"echo"}
+
+
+async def test_fact_written_after_an_untrusted_spawn_is_flagged(tmp_path):
+    """Недоверенный текст возвращается в контекст Директора: всё, что он запишет
+    в память по итогам такой задачи, должен увидеть человек."""
+    facts.init_store(str(tmp_path / "f.db"))
+    lib = {"search": Skill(name="search", description="ищет в вебе",
+                           instructions="## поиск", tools=[], untrusted=True)}
+    llm = FakeLLM([
+        _call("spawn", {"role": "х", "skills": ["search"], "task": "найди asn"}),
+        ChoiceMessage(content="AS123", tool_calls=None),                     # агент
+        _call("remember_fact", {"scope": "net", "key": "asn", "value": "AS123"}),
+        ChoiceMessage(content="готово", tool_calls=None),
+    ])
+    d = Director(llm=llm, skills=lib)
+    await d.handle(Task(content="узнай asn"))
+
+    assert [f["key"] for f in facts.get_store().tainted()] == ["asn"]
+
+
+async def test_fact_from_an_ordinary_task_is_not_flagged(tmp_path):
+    facts.init_store(str(tmp_path / "f.db"))
+    llm = FakeLLM([
+        _call("remember_fact", {"scope": "net", "key": "asn", "value": "AS123"}),
+        ChoiceMessage(content="готово", tool_calls=None),
+    ])
+    d = Director(llm=llm, skills=_skill())
+    await d.handle(Task(content="запомни"))
+
+    assert facts.get_store().tainted() == []

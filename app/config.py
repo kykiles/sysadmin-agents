@@ -52,8 +52,10 @@ class Settings(BaseSettings):
     monitor_tls_every_ticks: int = Field(default=12, alias="MONITOR_TLS_EVERY_TICKS")
     monitor_fail_streak: int = Field(default=2, alias="MONITOR_FAIL_STREAK")
 
-    learn_every_ticks: int = Field(default=0, alias="LEARN_EVERY_TICKS")
-    lint_stale_stable_days: int = Field(default=90, alias="LINT_STALE_STABLE_DAYS")
+    # Самопроверка раз в сутки: 288 тиков монитора по 300 секунд. Была выключена
+    # (0) с момента появления — механизм забывания существовал, но не бежал.
+    learn_every_ticks: int = Field(default=288, alias="LEARN_EVERY_TICKS")
+    lint_stale_stable_days: int = Field(default=45, alias="LINT_STALE_STABLE_DAYS")
     lint_stale_snapshot_days: int = Field(default=14, alias="LINT_STALE_SNAPSHOT_DAYS")
     lint_remind_days: int = Field(default=30, alias="LINT_REMIND_DAYS")
     lint_max_items: int = Field(default=10, alias="LINT_MAX_ITEMS")

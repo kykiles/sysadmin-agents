@@ -88,8 +88,10 @@ class TaskJournal(SqliteStore):
     def search(self, query: str, limit: int = 3) -> list[dict]:
         """Похожие задачи из прошлого, лучшие по bm25.
 
-        Возвращаем интент, итог одной фразой, навыки и исход — трасса инструментов
-        остаётся детектору повторов, Директору она шум.
+        Возвращаем интент, итог одной фразой и навыки. Признак успеха не отдаём:
+        на живом журнале он оказался единицей в 89 случаях из 90 — ставится по
+        «Директор дошёл до ответа», а не «получилось», и как сигнал бесполезен.
+        Трасса инструментов остаётся в журнале, Директору она шум.
         """
         match = _match_query(query)
         if not match:
@@ -102,10 +104,10 @@ class TaskJournal(SqliteStore):
                 (match, limit),
             ).fetchall()
         return [
-            {"intent": intent, "summary": summary or "", "success": bool(ok),
+            {"intent": intent, "summary": summary or "",
              "skills": sorted({s for a in (agent or "").split(",") if a
                                for s in a.removeprefix("spawned:").split("+")})}
-            for _i, intent, summary, agent, ok in rows
+            for _i, intent, summary, agent, _ok in rows
         ]
 
     def recent(self, hours: int) -> list[dict]:

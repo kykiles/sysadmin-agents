@@ -74,8 +74,8 @@ _WRITE_SKILL_BLOCK = (
 
 _EXPERIENCE_BLOCK = (
     "\n\nОпыт прошлых задач: если задача похожа на уже сделанное, начни с "
-    "recall_experience — вернутся прошлые формулировки, итог одной фразой, какими "
-    "навыками решали и получилось ли. Неудачный прошлый заход — повод не повторять его.\n\n"
+    "recall_experience — вернутся прошлые формулировки, итог одной фразой и какими "
+    "навыками решали.\n\n"
 )
 
 
@@ -117,8 +117,16 @@ def build_director_prompt(available_skills: dict[str, str] | None = None,
         "уместны, он читается вне Telegram), а в ответ дай короткий итог на 2-3 строки.\n\n"
         "Память команды: в промпте есть только оглавление — области знаний и число фактов "
         "в каждой. Сами факты не вычитывай целиком: если область относится к задаче, "
-        "вызови recall_facts(scope=...). Итог задачи, который пригодится в будущем "
-        "(решение, топология, путь, договорённость) — сохрани через remember_fact.\n\n"
+        "вызови recall_facts(scope=...).\n"
+        "Что сохранять через remember_fact: только то, что переживёт эту задачу и "
+        "понадобится в следующей — топология, пути, версии, принятые решения, "
+        "договорённости. Результат разбора («что нашли в этих логах», «как устроена "
+        "чужая система») в память не клади: он уходит пользователю ответом или отчётом, "
+        "а в памяти станет мусором, который придётся вычищать.\n"
+        "Область (scope) — это тема, а не хост. Бери её из оглавления выше; заводи "
+        "новую, только если ни одна не подходит. Если в области больше тридцати фактов, "
+        "она слишком широкая — раздели по темам, иначе оглавление перестаёт экономить "
+        "токены: recall вернёт почти всю память.\n\n"
         f"{_EXPERIENCE_BLOCK if with_experience else ''}"
         f"{_WRITE_SKILL_BLOCK if with_write_skill else ''}"
         f"{spawn_block}"
@@ -229,6 +237,9 @@ class Director(Agent):
                 llm=llm,
                 gateway=gateway,
             )
+            # Вывод такого агента вернётся в контекст Директора: всё, что он запишет
+            # в память по итогам этой задачи, помечаем как пришедшее из чужого текста.
+            self._untrusted_used = self._untrusted_used or any(s.untrusted for s in chosen)
             log.info("spawn", role=role, skills=skills)
             # Временный агент: не регистрируем в реестре, вызываем напрямую и забываем
             # вместе с контекстом. memory не передаём — истории у него быть не должно.
@@ -287,7 +298,7 @@ class Director(Agent):
         # Директору нужны только чтение и запись, забывать факты — не его дело.
         # Память принадлежит Директору: инструменты приходят из ядра, а не из
         # библиотеки скилов, поэтому выдать их спавнутому агенту нечем.
-        tools = [report_tool, *memory_tools()]
+        tools = [report_tool, *memory_tools(lambda: self._untrusted_used)]
         if library:
             tools.append(spawn_tool)
         if skills_dir is not None:
@@ -335,6 +346,7 @@ class Director(Agent):
         # параллельный handle их бы перемешал. Спавнутых агентов замок не касается —
         # они выполняются внутри одной задачи и параллелятся намеренно.
         self._lock = asyncio.Lock()
+        self._untrusted_used = False
         self._sub_trace: list[str] = []
         self._agents_used: list[str] = []
         self._report_path: str = ""
@@ -352,6 +364,7 @@ class Director(Agent):
         async with self._lock:
             self._sub_trace = []
             self._agents_used = []
+            self._untrusted_used = False
             self._report_path = ""
             self.system_prompt = self._base_prompt + await asyncio.to_thread(_memory_index)
             try:

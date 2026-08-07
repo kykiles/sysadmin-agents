@@ -167,8 +167,9 @@ def test_search_ranks_by_relevance_and_hides_trace(tmp_path):
     assert found[0]["intent"] == "сколько юзеров на инбаунде"
     assert found[0]["summary"] == "На инбаунде 42 юзера."
     assert found[0]["skills"] == ["observe", "remnawave"]
-    assert found[0]["success"] is True
     assert "tool_seq" not in found[0]
+    # признак успеха в выдачу не идёт: на живом журнале он единица почти всегда
+    assert "success" not in found[0]
 
 
 def test_search_returns_nothing_on_empty_or_symbol_query(tmp_path):
@@ -182,10 +183,11 @@ def test_search_returns_nothing_on_empty_or_symbol_query(tmp_path):
 
 
 def test_search_keeps_failures(tmp_path):
+    """Неудачные задачи остаются в выдаче — итог одной фразой говорит сам за себя."""
     j = _journal(tmp_path)
     j.record(task_id="t1", chat_id="c1", intent="подними контейнер panel", agents=[],
              tool_seq=[], iterations=9, success=False, summary="Не поднялся: порт занят.")
-    assert j.search("контейнер panel")[0]["success"] is False
+    assert j.search("контейнер panel")[0]["summary"] == "Не поднялся: порт занят."
 
 
 def test_record_replaces_index_entry(tmp_path):

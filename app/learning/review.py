@@ -23,14 +23,15 @@ class LearningContext:
 @dataclass
 class ReviewOutcome:
     stale: list[StaleFact] = field(default_factory=list)
+    tainted: list[dict] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        return not self.stale
+        return not self.stale and not self.tainted
 
 
 async def run_review(ctx: LearningContext) -> ReviewOutcome:
-    """Один проход самопроверки: какие знания давно не подтверждались."""
+    """Один проход самопроверки: что давно не подтверждалось и что пришло из чужого текста."""
     stale: list[StaleFact] = []
     try:
         stale = find_stale(
@@ -43,7 +44,7 @@ async def run_review(ctx: LearningContext) -> ReviewOutcome:
         ctx.lint.mark_reported(stale, datetime.now(timezone.utc))
     except Exception:
         log.exception("lint_pass_failed")
-    return ReviewOutcome(stale=stale)
+    return ReviewOutcome(stale=stale, tainted=ctx.facts.tainted()[:settings.lint_max_items])
 
 
 def resolve_fact(facts, sid: str) -> tuple[str, str] | None:
@@ -55,9 +56,15 @@ def resolve_fact(facts, sid: str) -> tuple[str, str] | None:
 
 def render_review(outcome: ReviewOutcome) -> str:
     """Текст сводки в разметке модели — дальше через render_answer, как везде."""
-    if not outcome.stale:
-        return ""
-    lines = ["**Устаревшие знания**", ""]
-    for f in outcome.stale:
-        lines.append(f"> `{f.scope}/{f.key}` = {f.value} — не проверялось {f.age_days} дн.")
-    return "\n".join(lines)
+    blocks: list[str] = []
+    if outcome.stale:
+        lines = ["**Устаревшие знания**", ""]
+        for f in outcome.stale:
+            lines.append(f"> `{f.scope}/{f.key}` = {f.value} — не проверялось {f.age_days} дн.")
+        blocks.append("\n".join(lines))
+    if outcome.tainted:
+        lines = ["**Записано со слов недоверенного источника**", ""]
+        for f in outcome.tainted:
+            lines.append(f"> `{f['scope']}/{f['key']}` = {f['value']}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)

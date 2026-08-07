@@ -12,20 +12,28 @@ class KnowledgeStore(SqliteStore):
         "value TEXT NOT NULL, "
         "ts TEXT NOT NULL, "
         "kind TEXT NOT NULL DEFAULT 'stable', "
+        # Факт записан в задаче, где работал скил с недоверенным выводом (веб, чужой
+        # API). Инструкция, внедрённая в такой текст, осела бы в памяти навсегда —
+        # поэтому такие факты показываются человеку на самопроверке.
+        "tainted INTEGER NOT NULL DEFAULT 0, "
         "PRIMARY KEY (scope, key))",
     )
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         self._add_column(conn, "facts", "kind", "TEXT NOT NULL DEFAULT 'stable'")
+        self._add_column(conn, "facts", "tainted", "INTEGER NOT NULL DEFAULT 0")
 
-    def remember(self, scope: str, key: str, value: str, kind: str = "stable") -> None:
+    def remember(self, scope: str, key: str, value: str, kind: str = "stable",
+                 tainted: bool = False) -> None:
         ts = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO facts (scope, key, value, ts, kind) VALUES (?, ?, ?, ?, ?) "
+                "INSERT INTO facts (scope, key, value, ts, kind, tainted) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(scope, key) DO UPDATE SET "
-                "value = excluded.value, ts = excluded.ts, kind = excluded.kind",
-                (scope, key, value, ts, kind),
+                "value = excluded.value, ts = excluded.ts, kind = excluded.kind, "
+                "tainted = excluded.tainted",
+                (scope, key, value, ts, kind, int(tainted)),
             )
 
     def recall(self, scope: str | None = None, query: str | None = None) -> list[dict]:
@@ -65,6 +73,14 @@ class KnowledgeStore(SqliteStore):
             {"scope": s, "key": k, "value": v, "kind": kind, "ts": ts}
             for s, k, v, kind, ts in rows
         ]
+
+    def tainted(self) -> list[dict]:
+        """Факты, записанные в задачах с недоверенным выводом — на глаза человеку."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT scope, key, value FROM facts WHERE tainted = 1 ORDER BY ts"
+            ).fetchall()
+        return [{"scope": s, "key": k, "value": v} for s, k, v in rows]
 
     def forget(self, scope: str, key: str) -> None:
         with self._connect() as conn:

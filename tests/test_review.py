@@ -137,3 +137,14 @@ async def test_silent_when_nothing_found(tmp_path):
     bot = await _tick(tmp_path, cfg, _ctx(tmp_path), tick=1)
 
     bot.send_message.assert_not_called()
+
+
+async def test_review_shows_facts_from_untrusted_sources(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.facts.remember("net", "asn", "AS123", tainted=True)
+
+    outcome = await run_review(ctx)
+
+    assert [f["key"] for f in outcome.tainted] == ["asn"]
+    assert "недоверенного источника" in render_review(outcome)
+    assert not outcome.is_empty
