@@ -8,7 +8,6 @@ from app.skills.loader import load_all_skills
 from app.memory.history import DialogHistory
 from app.memory.facts import init_store, get_store
 from app.memory.journal import TaskJournal
-from app.learning.detector import CandidateStore
 from app.learning.lint import LintState
 from app.learning.review import LearningContext
 from app.bot.bot import create_bot, create_dispatcher, set_bot_commands
@@ -37,16 +36,13 @@ async def main() -> None:
     )
     journal = TaskJournal(settings.journal_db_path) if settings.journal_enabled else None
     learning = LearningContext(
-        journal=journal,
         facts=get_store(),
-        candidates=CandidateStore(settings.journal_db_path),
         lint=LintState(settings.journal_db_path),
-        llm=llm,
     ) if journal is not None else None
     bot = create_bot()
     gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)
-    director = Director(llm=llm, gateway=gateway,
-                        memory=history, journal=journal, skills=skills)
+    director = Director(llm=llm, gateway=gateway, memory=history, journal=journal,
+                        skills=skills, skills_dir=app_dir / "skills")
 
     def reload_library() -> str:
         """Перечитать skills/ без рестарта. Новые скиллы подхватываются сразу;

@@ -8,7 +8,7 @@ from app.agents.messages import Task, Result
 from app.bot.filters import WhitelistFilter
 from app.bot.keyboards import review_markup
 from app.bot.render import render_answer, split_message
-from app.learning.review import render_review, resolve_candidate, resolve_fact, run_review
+from app.learning.review import render_review, resolve_fact, run_review
 from app.logging import get_logger
 
 log = get_logger("handlers")
@@ -81,19 +81,11 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
             return
         outcome = await run_review(learning)
         if outcome.is_empty:
-            await message.answer("Нечего предложить: повторов и устаревших фактов не нашёл.")
+            await message.answer("Нечего предложить: устаревших фактов не нашёл.")
             return
         await message.answer(
             render_answer(render_review(outcome)), reply_markup=review_markup(outcome)
         )
-
-    @router.callback_query(F.data.startswith("lc:"))
-    async def _reject_candidate(callback: CallbackQuery):
-        _, sid, _choice = callback.data.split(":")
-        signature = resolve_candidate(learning.candidates, sid) if learning else None
-        if signature is not None:
-            learning.candidates.set_status(signature, "rejected")
-        await callback.answer("Больше не предложу" if signature else "Кандидат не найден")
 
     @router.callback_query(F.data.startswith("lf:"))
     async def _forget_fact(callback: CallbackQuery):

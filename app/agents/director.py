@@ -1,8 +1,11 @@
 import asyncio
+import re
 from dataclasses import replace
 from functools import reduce
 from operator import or_
+from pathlib import Path
 
+import yaml
 from pydantic import BaseModel, Field
 from app.agents.base import Agent
 from app.agents.loader import compose_prompt
@@ -12,6 +15,7 @@ from app.config import settings
 from app.llm.client import LLMClient
 from app.logging import get_logger
 from app.memory.facts import get_store
+from app.skills.loader import load_all_skills
 from app.skills.memory.tools import build_tools as memory_tools
 from app.skills.readonly import HostAccess, build_host_tools
 from app.tools.base import Tool, Safety
@@ -36,6 +40,38 @@ class RecallExperienceParams(BaseModel):
     )
 
 
+class WriteSkillParams(BaseModel):
+    name: str = Field(description="snake_case skill name, latin, e.g. weekly_report")
+    description: str = Field(
+        description="one line saying WHEN it applies and WHAT it does — this is the only "
+                    "thing you will see when choosing skills later, so name the triggers: "
+                    "'when asked for a weekly traffic report: collects ... and formats ...'"
+    )
+    instructions: str = Field(
+        description="the playbook itself, in Russian markdown: steps in order, which skills "
+                    "to grant the agent, what to check, known pitfalls. Explain why a step "
+                    "matters instead of writing ВСЕГДА/НИКОГДА — reasons generalise, rules don't"
+    )
+
+
+_SKILL_NAME = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
+
+# Плейбук уходит в промпт агента при каждом spawn, поэтому длина — это цена в токенах
+# на всю его дальнейшую жизнь. Ручные скилы укладываются в 60 строк; просьбу в промпте
+# модель проигнорирует, предел механический.
+_SKILL_MAX_CHARS = 6000
+
+_WRITE_SKILL_BLOCK = (
+    "\n\nПроцедурная память: если задача решена нетривиальной последовательностью, "
+    "которая повторится (порядок шагов, какие навыки выдавать агенту, что проверять, "
+    "где грабли) — сохрани её плейбуком через write_skill. Он попадёт в список навыков "
+    "и будет доступен при следующем spawn. Так система запоминает не факт, "
+    "а способ работы. Новых инструментов плейбук не создаёт — он опирается на "
+    "существующие навыки, их и перечисли в инструкциях. Пиши коротко и по делу: "
+    "плейбук уходит в промпт агента целиком.\n"
+)
+
+
 _EXPERIENCE_BLOCK = (
     "\n\nОпыт прошлых задач: если задача похожа на уже сделанное, начни с "
     "recall_experience — вернутся прошлые формулировки, итог одной фразой, какими "
@@ -44,7 +80,8 @@ _EXPERIENCE_BLOCK = (
 
 
 def build_director_prompt(available_skills: dict[str, str] | None = None,
-                          with_experience: bool = False) -> str:
+                          with_experience: bool = False,
+                          with_write_skill: bool = False) -> str:
     spawn_block = ""
     if available_skills:
         skills = "\n".join(f"- {name}: {desc}" for name, desc in available_skills.items())
@@ -83,6 +120,7 @@ def build_director_prompt(available_skills: dict[str, str] | None = None,
         "вызови recall_facts(scope=...). Итог задачи, который пригодится в будущем "
         "(решение, топология, путь, договорённость) — сохрани через remember_fact.\n\n"
         f"{_EXPERIENCE_BLOCK if with_experience else ''}"
+        f"{_WRITE_SKILL_BLOCK if with_write_skill else ''}"
         f"{spawn_block}"
     )
 
@@ -149,7 +187,8 @@ def _summary(content: str) -> str:
 
 class Director(Agent):
     def __init__(self, llm: LLMClient, gateway=None,
-                 memory=None, journal=None, skills: dict | None = None):
+                 memory=None, journal=None, skills: dict | None = None,
+                 skills_dir: Path | None = None):
         async def _make_report(title: str, markdown: str) -> dict:
             path = await asyncio.to_thread(
                 save_report, settings.reports_dir, title, markdown
@@ -207,6 +246,32 @@ class Director(Agent):
             self._agents_used.append(sub.name)
             return {"agent": sub.name, "result": result.content, "success": result.success}
 
+        async def _write_skill(name: str, description: str, instructions: str) -> dict:
+            if not _SKILL_NAME.match(name):
+                return {"error": "имя навыка: латиница snake_case, 3-31 символ"}
+            if len(instructions) > _SKILL_MAX_CHARS:
+                return {"error": f"плейбук длиннее {_SKILL_MAX_CHARS} символов — сократи до сути"}
+            d = skills_dir / name
+            # Граница простая: плейбуки пишет модель, код пишет человек. Скил с
+            # tools.py несёт права доступа к хосту, и переписать его инструкции —
+            # значит переписать ограничения, под которыми их выдали.
+            if (d / "tools.py").exists():
+                return {"error": f"навык {name} содержит код — его плейбук правит человек"}
+            meta = yaml.safe_dump(
+                {"name": name, "description": description},
+                allow_unicode=True, sort_keys=False,
+            )
+            body = f"---\n{meta}---\n\n{instructions.strip()}\n"
+
+            def _save() -> None:
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "SKILL.md").write_text(body, encoding="utf-8")
+
+            await asyncio.to_thread(_save)
+            self.reload_library(await asyncio.to_thread(load_all_skills, skills_dir))
+            log.info("write_skill", skill=name)
+            return {"saved": name, "note": "навык доступен для spawn сразу"}
+
         report_tool = Tool(
             name="make_report",
             description=(
@@ -233,6 +298,17 @@ class Director(Agent):
         tools = [report_tool, *mem_tools]
         if library:
             tools.append(spawn_tool)
+        if skills_dir is not None:
+            tools.append(Tool(
+                name="write_skill",
+                description=(
+                    "Save a reusable playbook as a skill (SKILL.md) so future tasks can spawn "
+                    "an agent with it. Text only — it grants no new tools. Requires confirmation."
+                ),
+                params_model=WriteSkillParams,
+                fn=_write_skill,
+                safety=Safety.DANGEROUS,
+            ))
         if journal is not None:
             async def _recall_experience(query: str) -> dict:
                 return {"episodes": await asyncio.to_thread(journal.search, query)}
@@ -252,6 +328,7 @@ class Director(Agent):
             system_prompt=build_director_prompt(
                 {n: s.description for n, s in library.items()},
                 with_experience=journal is not None,
+                with_write_skill=skills_dir is not None,
             ),
             tools=tools,
             llm=llm,
@@ -259,6 +336,7 @@ class Director(Agent):
             memory=memory,
         )
         self._library = library
+        self._skills_dir = skills_dir
         self._base_prompt = self.system_prompt
         self._journal = journal
         # Задачи Директора идут строго по одной: накопители ниже живут на инстансе,
@@ -275,6 +353,7 @@ class Director(Agent):
         self._base_prompt = build_director_prompt(
             {n: s.description for n, s in self._library.items()},
             with_experience=self._journal is not None,
+            with_write_skill=self._skills_dir is not None,
         )
 
     async def handle(self, task: Task) -> Result:

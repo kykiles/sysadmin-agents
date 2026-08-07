@@ -108,22 +108,16 @@ class TaskJournal(SqliteStore):
             for _i, intent, summary, agent, ok in rows
         ]
 
-    def recent(self, hours: int, unreviewed_only: bool = False) -> list[dict]:
+    def recent(self, hours: int) -> list[dict]:
         since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-        sql = ("SELECT id, intent, agent, tool_seq, iterations, success FROM tasks "
-               "WHERE ts >= ?")
-        if unreviewed_only:
-            sql += " AND reviewed = 0"
         with self._connect() as conn:
-            rows = conn.execute(sql + " ORDER BY ts", (since,)).fetchall()
+            rows = conn.execute(
+                "SELECT id, intent, agent, tool_seq, iterations, success FROM tasks "
+                "WHERE ts >= ? ORDER BY ts",
+                (since,),
+            ).fetchall()
         return [
             {"id": i, "intent": intent, "agents": [a for a in (agent or "").split(",") if a],
              "tool_seq": json.loads(seq), "iterations": it, "success": bool(ok)}
             for i, intent, agent, seq, it, ok in rows
         ]
-
-    def mark_reviewed(self, task_ids: list[str]) -> None:
-        with self._connect() as conn:
-            conn.executemany(
-                "UPDATE tasks SET reviewed = 1 WHERE id = ?", [(i,) for i in task_ids]
-            )
