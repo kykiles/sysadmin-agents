@@ -53,14 +53,17 @@ class KnowledgeStore(SqliteStore):
             rows = conn.execute(sql, params).fetchall()
         return [{"scope": s, "key": k, "value": v, "kind": kind} for s, k, v, kind in rows]
 
-    def scopes(self) -> list[dict]:
-        """Оглавление памяти: области и сколько в каждой фактов. «Верхушка айсберга» —
-        по ней Директор решает, куда углубляться, не вычитывая факты целиком."""
+    def keys(self) -> list[dict]:
+        """Оглавление памяти: области и ключи фактов в каждой. По ключам Директор
+        решает, что уже известно и куда углубляться, не вычитывая значения."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT scope, COUNT(*) FROM facts GROUP BY scope ORDER BY scope"
+                "SELECT scope, key FROM facts ORDER BY scope, key"
             ).fetchall()
-        return [{"scope": s, "facts": n} for s, n in rows]
+        index: dict[str, list[str]] = {}
+        for scope, key in rows:
+            index.setdefault(scope, []).append(key)
+        return [{"scope": s, "keys": k} for s, k in index.items()]
 
     def all_with_ts(self) -> list[dict]:
         """Все факты вместе с меткой времени — для lint'а. Инструментам памяти `ts`

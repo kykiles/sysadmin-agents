@@ -109,7 +109,7 @@ async def test_spawned_agents_never_get_memory_tools(tmp_path):
     assert not memory_tools & {t["function"]["name"] for t in llm.seen_tools[1]}
 
 
-def test_memory_index_lists_scopes_not_facts(tmp_path):
+def test_memory_index_lists_keys_not_values(tmp_path):
     facts.init_store(str(tmp_path / "f.db"))
     store = facts.get_store()
     store.remember("docker", "compose_path", "/opt/app")
@@ -117,8 +117,8 @@ def test_memory_index_lists_scopes_not_facts(tmp_path):
     store.remember("global", "timezone", "UTC")
 
     idx = _memory_index()
-    assert "docker: 2 фактов" in idx
-    assert "global: 1 фактов" in idx
+    assert "docker: compose_path, engine_version" in idx
+    assert "global: timezone" in idx
     assert "/opt/app" not in idx  # значения в промпт не попадают
 
 

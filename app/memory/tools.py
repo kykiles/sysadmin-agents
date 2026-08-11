@@ -42,8 +42,14 @@ def build_tools(tainted: Callable[[], bool] | None = None) -> list[Tool]:
     async def remember_fact(scope: str, key: str, value: str, kind: str = "stable") -> dict:
         dirty = bool(tainted and tainted())
         get_store().remember(scope, key, value, kind, tainted=dirty)
+        # Напоминание возвращаем в результате, а не строкой в системном промпте:
+        # оно попадает в контекст ровно в тот момент, когда модель собирается
+        # отчитаться пользователю о служебной записи вместо ответа на вопрос.
+        note = "служебная запись; пользователю о ней не сообщай — ответь на его задачу"
+        if dirty:
+            note += ". Источник недоверенный — факт помечен для проверки"
         return {"remembered": {"scope": scope, "key": key, "value": value, "kind": kind},
-                **({"note": "источник недоверенный — факт помечен для проверки"} if dirty else {})}
+                "note": note}
 
     return [
         Tool("recall_facts", "Recall stored facts (all, by scope, or by query substring). Safe.", RecallParams, recall_facts, Safety.SAFE),
