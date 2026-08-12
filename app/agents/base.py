@@ -98,20 +98,24 @@ class Agent:
             *history,
             {"role": "user", "content": task.content},
         ]
-        last_content = ""
+        # Текст ходов, где модель заодно вызывала инструменты. Она пишет там не только
+        # «сейчас посмотрю»: развёрнутый ответ вместе с попутным remember_fact — обычное
+        # дело, а следующим ходом идёт «отчёт выше». Выбросить их значит потерять ответ.
+        said: list[str] = []
         trace: list[str] = []
         iterations = 0
         for _ in range(settings.agent_max_iterations):
             iterations += 1
             msg = await self._llm.chat(messages, [t.schema() for t in self.tools])
-            if msg.content:
-                last_content = msg.content
             if not msg.tool_calls:
+                content = "\n\n".join([*said, msg.content or ""]).strip()
                 if self._memory:
                     await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
-                    await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", msg.content or "")
-                return Result(task_id=task.id, content=msg.content or "",
+                    await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
+                return Result(task_id=task.id, content=content,
                               trace=trace, iterations=iterations)
+            if msg.content:
+                said.append(msg.content)
             assistant: dict = {
                 "role": "assistant",
                 "content": msg.content,
@@ -158,7 +162,7 @@ class Agent:
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": out})
         limit = settings.agent_max_iterations
         note = f"достигнут лимит итераций ({limit}), ответ может быть неполным"
-        content = f"{last_content}\n\n{note}" if last_content else note
+        content = "\n\n".join([*said, note])
         if self._memory:
             await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
             await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)

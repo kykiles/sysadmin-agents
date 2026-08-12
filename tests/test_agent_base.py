@@ -40,6 +40,20 @@ async def test_agent_runs_safe_tool_then_answers():
     assert "result" in res.content
 
 
+async def test_text_written_alongside_tool_call_is_not_lost():
+    """Модель пишет отчёт в ходе с инструментом, а последним ходом — «отчёт выше»."""
+    tool = make_tool()
+    with_report = ChoiceMessage(
+        content="Полный отчёт по схемам",
+        tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="echo", arguments=json.dumps({"x": "hi"})))],
+    )
+    final = ChoiceMessage(content="Схемы сняты — отчёт выше.", tool_calls=None)
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=FakeLLM([with_report, final]))
+    res = await agent.handle(Task(content="сравни схемы"))
+    assert "Полный отчёт по схемам" in res.content
+    assert "отчёт выше" in res.content
+
+
 async def test_dangerous_rejected():
     class Q(BaseModel):
         c: str
