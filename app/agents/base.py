@@ -6,7 +6,7 @@ from app.config import settings
 from app.llm.client import LLMClient
 from app.tools.base import Tool, Safety, INTENT_FIELD
 from app.agents.messages import Task, Result, ConfirmationRequest, Decision
-from app.logging import get_logger
+from app.logging import get_logger, redact
 
 log = get_logger("agent")
 
@@ -56,7 +56,7 @@ class Agent:
                 out = json.dumps({"error": f"invalid tool arguments: {e}"})
             else:
                 out = await tool.execute(args)
-        log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=str(out)[:200])
+        log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=redact(str(out))[:200])
         return out
 
     async def _run_dangerous(self, task: Task, tc, tool: Tool, reason: str) -> str:
@@ -72,7 +72,7 @@ class Agent:
             description=f"{tool.name} {args}",
             reason=intent or reason,
         )
-        log.info("confirmation_required", agent=self.name, tool=tool.name, args=args)
+        log.info("confirmation_required", agent=self.name, tool=tool.name, args=redact(str(args)))
         decision = (
             await self._gateway.request(req) if self._gateway is not None
             else Decision.REJECTED
@@ -88,7 +88,7 @@ class Agent:
             decision=decision.value,
             result=audit.outcome(out),
         )
-        log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=str(out)[:200])
+        log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=redact(str(out))[:200])
         return out
 
     async def handle(self, task: Task) -> Result:

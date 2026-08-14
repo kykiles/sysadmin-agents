@@ -1,6 +1,17 @@
 import logging
+import re
 import structlog
 from app.config import settings
+
+# Токены Remnawave и прочих API утекают в логи через превью аргументов curl.
+_SECRET = re.compile(
+    r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"   # JWT
+    r"|(?<=Bearer )[A-Za-z0-9._~+/=-]{8,}"                     # Bearer <token>
+)
+
+
+def redact(text: str) -> str:
+    return _SECRET.sub("<redacted>", text)
 
 
 def setup_logging() -> None:

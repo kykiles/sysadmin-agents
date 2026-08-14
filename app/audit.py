@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import settings
-from app.logging import get_logger
+from app.logging import get_logger, redact
 
 log = get_logger("audit")
 
@@ -27,7 +27,7 @@ def _record_sync(event: dict) -> None:
         ensure_ascii=False, default=str,
     )
     with open(path, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+        f.write(redact(line) + "\n")
 
 
 async def record(**event) -> None:
