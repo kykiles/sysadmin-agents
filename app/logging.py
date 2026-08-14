@@ -20,6 +20,9 @@ def setup_logging() -> None:
         level=logging.INFO,
         handlers=[logging.StreamHandler()],
     )
+    # httpx логирует URL целиком, а ключи API живут в query-строке (Tavily).
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     file_handler = logging.FileHandler(settings.audit_log_path)
     file_handler.setLevel(logging.INFO)
     logging.getLogger().addHandler(file_handler)
