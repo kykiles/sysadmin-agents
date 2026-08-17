@@ -136,6 +136,13 @@ def test_scope_limits_binaries(access, allowed, denied):
     assert not is_read_only(denied, access.binaries)
 
 
+@pytest.mark.parametrize("access", [HOST, OBSERVE])
+def test_nproc_and_echo_pipeline(access):
+    # агент собирает сводку одним sh -c 'echo ...; uptime; nproc' — не должно упираться в скоуп
+    assert is_read_only(["nproc"], access.binaries)
+    assert is_read_only(["sh", "-c", "echo '=== load ==='; uptime; nproc"], access.binaries)
+
+
 def test_scope_applies_inside_sh_wrapper():
     # обёртка не обходит скоуп: certbot недоступен агенту со скилом host
     assert not is_read_only(["sh", "-c", "certbot certificates"], HOST.binaries)

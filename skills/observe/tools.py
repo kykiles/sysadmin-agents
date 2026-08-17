@@ -12,7 +12,7 @@ from app.tools.docker import (
 )
 
 ACCESS = HostAccess(binaries=frozenset({
-    "free", "uptime", "vmstat", "iostat", "mpstat", "df", "du",
+    "free", "uptime", "vmstat", "iostat", "mpstat", "df", "du", "nproc", "echo",
     "ps", "top", "dmesg", "who", "w", "uname", "hostname", "lsof",
     "ss", "ip", "journalctl", "systemctl",
     "tail", "cat", "head", "zcat", "grep", "egrep", "wc",

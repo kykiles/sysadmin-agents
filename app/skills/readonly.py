@@ -39,7 +39,7 @@ class HostAccess:
 
 _ALWAYS_SAFE = frozenset({
     # состояние системы
-    "df", "du", "free", "uptime", "uname", "hostname", "date", "id",
+    "df", "du", "free", "uptime", "uname", "hostname", "date", "id", "nproc", "echo",
     "lsblk", "lscpu", "vmstat", "iostat", "mpstat", "ps", "top", "dmesg",
     "who", "w", "lsof", "ss", "getent", "lastlog",
     # файлы и текст: чтение не меняет состояние
