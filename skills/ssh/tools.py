@@ -10,15 +10,16 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from skills.host.tools import ACCESS as _HOST_ACCESS
-from app.skills.readonly import is_read_only
+from app.skills.readonly import HostAccess, is_read_only
 from app.tools.base import Tool, Safety
 from app.tools.docker import shell_exec
 
-_NODE_BINARIES = _HOST_ACCESS.binaries | {"docker"}
 
-
-def _is_read_only(command: list[str]) -> bool:
-    return is_read_only(command, _NODE_BINARIES)
+def _node_binaries(access: HostAccess) -> frozenset[str]:
+    """Что читаем на ноде: базовый набор хоста плюс то, что принесли остальные
+    выданные агенту скилы (observe даёт top/vmstat, tls — openssl). Иначе одна и
+    та же команда проходила локально и отвергалась на ноде."""
+    return _HOST_ACCESS.binaries | access.binaries | {"docker"}
 
 
 class SshParams(BaseModel):
@@ -43,8 +44,8 @@ def _ssh_argv(host: str, command: list[str]) -> list[str]:
     ]
 
 
-async def ssh_query(host: str, command: list[str]) -> dict:
-    if not _is_read_only(command):
+async def ssh_query(host: str, command: list[str], binaries: frozenset[str]) -> dict:
+    if not is_read_only(command, binaries):
         return {
             "host": host,
             "command": command,
@@ -57,8 +58,13 @@ async def ssh_exec(host: str, command: list[str]) -> dict:
     return {"host": host, **await shell_exec(_ssh_argv(host, command))}
 
 
-def build_tools() -> list[Tool]:
+def build_access_tools(access: HostAccess) -> list[Tool]:
+    binaries = _node_binaries(access)
+
+    async def query(host: str, command: list[str]) -> dict:
+        return await ssh_query(host, command, binaries)
+
     return [
-        Tool("ssh_query", "Run a READ-ONLY command on a REMOTE node over SSH (docker ps/logs, systemctl status, journalctl, df, free, uptime, ss). May be wrapped in `sh -c '<pipeline>'`. Safe, auto-executed.", SshParams, ssh_query, Safety.SAFE),
+        Tool("ssh_query", "Run a READ-ONLY command on a REMOTE node over SSH (docker ps/logs, systemctl status, journalctl, df, free, uptime, ss). May be wrapped in `sh -c '<pipeline>'`. Safe, auto-executed.", SshParams, query, Safety.SAFE),
         Tool("ssh_exec", "Run any command on a REMOTE node over SSH (DESTRUCTIVE: restarts, updates, compose). Requires user confirmation.", SshParams, ssh_exec, Safety.DANGEROUS),
     ]

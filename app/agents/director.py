@@ -220,6 +220,8 @@ class Director(Agent):
                 access.binaries
                 or access.exec_allowed
                 or any(t.safety is Safety.DANGEROUS for s in chosen for t in s.tools)
+                # скил, чьи инструменты строятся по доступу (ssh), даёт доступ к нодам
+                or any(s.access_tools for s in chosen)
             ):
                 # Текст, который мы не контролируем, не должен попадать в контекст
                 # агента с полномочиями: внедрённая в него инструкция исполнилась бы
@@ -238,6 +240,10 @@ class Director(Agent):
                 for s in chosen
                 for t in (_budgeted(s.tools, _UNTRUSTED_CALL_BUDGET) if s.untrusted else s.tools)
             }
+            for s_ in chosen:
+                if s_.access_tools:
+                    for t in s_.access_tools(access):
+                        uniq.setdefault(t.name, t)
             for t in build_host_tools(access):
                 uniq.setdefault(t.name, t)
             sub = Agent(

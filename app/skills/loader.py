@@ -1,4 +1,5 @@
 import importlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +19,9 @@ class Skill:
     # Доступ к хосту, который скил приносит агенту. При спавне доступы выданных
     # скилов объединяются в один host_query — см. readonly.build_host_tools.
     access: HostAccess = field(default_factory=HostAccess)
+    # Инструменты, которым нужен объединённый доступ агента: у ssh список read-only
+    # бинарников зависит от того, какие скилы выданы вместе с транспортом.
+    access_tools: Callable[[HostAccess], list[Tool]] | None = None
     # Вывод скила содержит текст, который мы не контролируем (веб-страница, чужой
     # API). Такому агенту нельзя одновременно давать полномочия — см. Director._spawn.
     untrusted: bool = False
@@ -35,6 +39,7 @@ def load_skill(skill_dir: Path) -> Skill:
     meta, body = parse_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
     tools: list[Tool] = []
     access = HostAccess()
+    access_tools = None
     # Инструменты MCP-сервера приходят снаружи, и уровень риска у них взять неоткуда:
     # сервер отдаёт только имя, описание и схему. Решает человек, подключивший сервер,
     # полем `safety: safe`; молчание означает «опасно» — единственный безопасный
@@ -54,9 +59,10 @@ def load_skill(skill_dir: Path) -> Skill:
         # заранее, где живёт библиотека.
         mod = importlib.import_module(f"{skill_dir.parent.name}.{skill_dir.name}.tools")
         access = getattr(mod, "ACCESS", access)
+        access_tools = getattr(mod, "build_access_tools", None)
         if hasattr(mod, "build_tools"):
             tools = mod.build_tools()
-        elif not access.binaries and not access.exec_allowed:
+        elif not access_tools and not access.binaries and not access.exec_allowed:
             raise ValueError(
                 f"skill {skill_dir.name}: tools.py должен определять build_tools() или ACCESS"
             )
@@ -66,6 +72,7 @@ def load_skill(skill_dir: Path) -> Skill:
         instructions=body.strip(),
         tools=tools,
         access=access,
+        access_tools=access_tools,
         untrusted=bool(meta.get("untrusted")),
     )
 
