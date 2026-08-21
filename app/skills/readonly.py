@@ -40,11 +40,11 @@ class HostAccess:
 _ALWAYS_SAFE = frozenset({
     # состояние системы
     "df", "du", "free", "uptime", "uname", "hostname", "date", "id", "nproc", "echo",
-    "lsblk", "lscpu", "vmstat", "iostat", "mpstat", "ps", "top", "dmesg",
+    "lsblk", "lscpu", "vmstat", "iostat", "mpstat", "ps", "top",
     "who", "w", "lsof", "ss", "getent", "lastlog",
     # файлы и текст: чтение не меняет состояние
     "ls", "stat", "cat", "head", "tail", "zcat", "grep", "egrep", "wc",
-    "find", "readlink", "test", "openssl",
+    "readlink", "test",
 })
 
 
@@ -69,6 +69,18 @@ _JOURNALCTL_MUTATING = frozenset({
 })
 
 _APT_READONLY = frozenset({"-s", "--simulate", "--dry-run"})
+
+# find умеет удалять и запускать что угодно, openssl — писать файлы, dmesg — чистить
+# буфер: читающие по названию, но не по любым аргументам.
+_FIND_MUTATING = frozenset({
+    "-delete", "-exec", "-execdir", "-ok", "-okdir",
+    "-fprint", "-fprint0", "-fprintf", "-fls",
+})
+_OPENSSL_WRITING = frozenset({"-out", "-keyout"})
+_DMESG_MUTATING = frozenset({
+    "-C", "--clear", "-c", "--read-clear", "-D", "--console-off",
+    "-E", "--console-on", "-n", "--console-level", "-S", "--syslog",
+})
 
 # На ноде docker доступен только через ssh, сокета у нас там нет.
 _DOCKER_READONLY = frozenset({
@@ -104,6 +116,9 @@ def _docker(args: list[str]) -> bool:
 
 
 _CHECKS: dict[str, Callable[[list[str]], bool]] = {
+    "find": lambda args: not any(a in _FIND_MUTATING for a in args),
+    "openssl": lambda args: not any(a in _OPENSSL_WRITING for a in args),
+    "dmesg": lambda args: not any(a in _DMESG_MUTATING for a in args),
     "crontab": lambda args: args[:1] == ["-l"],
     "iptables": _iptables,
     "ip6tables": _iptables,
@@ -147,12 +162,12 @@ def _simple(command: list[str], binaries: frozenset[str]) -> bool:
     return check is not None and check(args)
 
 
-def refusal(command: list[str], binaries: frozenset[str]) -> dict:
+def refusal(command: list[str], binaries: frozenset[str], exec_tool: str = "shell_exec") -> dict:
     return {
         "command": command,
         "error": "команда не входит в список read-only для этого агента "
                  f"(доступны: {', '.join(sorted(binaries))}). "
-                 "Для изменяющих операций используй shell_exec (с подтверждением).",
+                 f"Для изменяющих операций используй {exec_tool} (с подтверждением).",
     }
 
 

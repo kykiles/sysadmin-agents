@@ -1,3 +1,5 @@
+from unittest import mock
+
 import pytest
 
 from skills.ssh.tools import _node_binaries, _ssh_argv, ssh_query, build_access_tools
@@ -9,6 +11,12 @@ _BASE = _node_binaries(HostAccess())
 
 def _is_read_only(command, binaries=_BASE):
     return is_read_only(command, binaries)
+
+
+async def _dry(query, command):
+    """Проверка классификации без реального ssh: подменяем транспорт."""
+    with mock.patch("skills.ssh.tools.shell_exec", new=mock.AsyncMock(return_value={})):
+        return await query(host="10.0.0.1", command=command)
 
 
 def test_readonly_covers_host_and_docker():
@@ -51,6 +59,15 @@ def test_binaries_extend_with_other_skills():
 async def test_ssh_query_refuses_mutating():
     res = await ssh_query("10.0.0.1", ["docker", "restart", "remnanode"], _BASE)
     assert "error" in res and "ssh_exec" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_query_tool_uses_full_node_scope():
+    """Инструмент должен получать _node_binaries(access), а не голый access.binaries."""
+    query = build_access_tools(HostAccess(binaries=frozenset({"top"})))[0].fn
+    assert "error" not in await _dry(query, ["docker", "ps"])
+    assert "error" not in await _dry(query, ["top", "-bn1"])
+    assert "error" in await _dry(query, ["rm", "-rf", "/"])
 
 
 def test_tool_safety():

@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from skills.host.tools import ACCESS as _HOST_ACCESS
-from app.skills.readonly import HostAccess, is_read_only
+from app.skills.readonly import HostAccess, is_read_only, refusal
 from app.tools.base import Tool, Safety
 from app.tools.docker import shell_exec
 
@@ -46,11 +46,10 @@ def _ssh_argv(host: str, command: list[str]) -> list[str]:
 
 async def ssh_query(host: str, command: list[str], binaries: frozenset[str]) -> dict:
     if not is_read_only(command, binaries):
-        return {
-            "host": host,
-            "command": command,
-            "error": "команда не входит в список read-only; для изменяющих операций используй ssh_exec (с подтверждением)",
-        }
+        # Отказ теперь бывает двух видов: команда меняет состояние либо её бинарника
+        # нет в скоупе этого агента. Перечисляем скоуп, чтобы он не эскалировал
+        # читающую команду в ssh_exec с подтверждением на ровном месте.
+        return {"host": host, **refusal(command, binaries, "ssh_exec")}
     return {"host": host, **await shell_exec(_ssh_argv(host, command))}
 
 
@@ -65,6 +64,8 @@ def build_access_tools(access: HostAccess) -> list[Tool]:
         return await ssh_query(host, command, binaries)
 
     return [
-        Tool("ssh_query", "Run a READ-ONLY command on a REMOTE node over SSH (docker ps/logs, systemctl status, journalctl, df, free, uptime, ss). May be wrapped in `sh -c '<pipeline>'`. Safe, auto-executed.", SshParams, query, Safety.SAFE),
+        Tool("ssh_query", "Run a READ-ONLY command on a REMOTE node over SSH. Allowed binaries: "
+             f"{', '.join(sorted(binaries))}. May be wrapped in `sh -c '<pipeline>'`. Safe, auto-executed.",
+             SshParams, query, Safety.SAFE),
         Tool("ssh_exec", "Run any command on a REMOTE node over SSH (DESTRUCTIVE: restarts, updates, compose). Requires user confirmation.", SshParams, ssh_exec, Safety.DANGEROUS),
     ]
