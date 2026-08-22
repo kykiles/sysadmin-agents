@@ -131,12 +131,20 @@ async def docker_exec(container: str, command: list[str]) -> dict:
         c = docker.containers.container(container)
         exec_obj = await c.exec(cmd=command)
         stream = exec_obj.start(detach=False)
+
+        async def _drain() -> bytes:
+            chunks = []
+            while (msg := await stream.read_out()) is not None:
+                if msg.data:
+                    chunks.append(msg.data)
+            return b"".join(chunks)
+
         try:
-            msg = await asyncio.wait_for(stream.read_out(), timeout=settings.shell_timeout_seconds)
+            raw = await asyncio.wait_for(_drain(), timeout=settings.shell_timeout_seconds)
         except asyncio.TimeoutError:
             return {"container": container, "command": command, "output": "",
                     "exit_code": None, "timed_out": True}
-        output = msg.data.decode(errors="replace") if msg.data else ""
+        output = raw.decode(errors="replace")
         inspect = await exec_obj.inspect()
         return {"container": container, "command": command, "output": output, "exit_code": inspect.get("ExitCode")}
 
