@@ -17,5 +17,21 @@ api() {
   if [ -n "$body" ]; then
     args+=(-d "$body")
   fi
-  curl "${args[@]}"
+  local out
+  out=$(curl "${args[@]}")
+  # Ошибки панели приходят без .response ({"message":...,"errorCode":...}).
+  # Отдать их как есть и упасть: пустая карточка из null'ов молча врёт, что всё прошло.
+  if [ "$(jq -r 'has("response")' <<<"$out" 2>/dev/null)" != "true" ]; then
+    echo "$out" >&2
+    return 1
+  fi
+  echo "$out"
+}
+
+# need_id <value> — панель адресует пользователя числовым id (не uuid).
+need_id() {
+  [[ "$1" =~ ^[0-9]+$ ]] || {
+    echo "{\"error\":\"нужен числовой id пользователя (из user-find), получено: $1\"}"
+    exit 1
+  }
 }

@@ -124,3 +124,18 @@ def test_build_tools_safety():
     assert by_name["rw_action"].safety is Safety.DANGEROUS
     assert by_name["rw_curl_read"].safety is Safety.SAFE
     assert by_name["rw_curl_write"].safety is Safety.DANGEROUS
+
+
+def test_mutation_script_rejects_uuid():
+    """Панель адресует пользователя числовым id; uuid должен отбиваться до запроса."""
+    import subprocess
+    from pathlib import Path
+
+    script = Path("skills/remnawave/scripts/user-disable.sh")
+    proc = subprocess.run(
+        ["bash", str(script), "166d04e8-41af-475a-87f3-c20c1d05a331"],
+        capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "REMNAWAVE_BASE_URL": "http://x", "REMNAWAVE_API_KEY": "k"},
+    )
+    assert proc.returncode == 1
+    assert "числовой id" in proc.stdout

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# user-disable <uuid> — приостановить доступ пользователя.
+# user-disable <id> — приостановить доступ пользователя.
 source "$(dirname "$0")/_lib.sh"
-uuid="${1:?usage: user-disable <uuid>}"
-api POST "/api/users/$uuid/actions/disable" | jq '.response | {uuid, username, status}'
+id="${1:?usage: user-disable <id>}"
+need_id "$id"
+api POST "/api/users/$id/actions/disable" | jq '.response | {id, username, status}'

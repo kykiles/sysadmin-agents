@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# user-enable <uuid> — включить (снять приостановку) пользователя.
+# user-enable <id> — включить (снять приостановку) пользователя.
 source "$(dirname "$0")/_lib.sh"
-uuid="${1:?usage: user-enable <uuid>}"
-api POST "/api/users/$uuid/actions/enable" | jq '.response | {uuid, username, status}'
+id="${1:?usage: user-enable <id>}"
+need_id "$id"
+api POST "/api/users/$id/actions/enable" | jq '.response | {id, username, status}'

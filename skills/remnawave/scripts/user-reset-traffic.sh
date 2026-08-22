@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# user-reset-traffic <uuid> — обнулить счётчик трафика пользователя.
+# user-reset-traffic <id> — обнулить счётчик трафика пользователя.
 source "$(dirname "$0")/_lib.sh"
-uuid="${1:?usage: user-reset-traffic <uuid>}"
-api POST "/api/users/$uuid/actions/reset-traffic" \
-  | jq '.response | {uuid, username, usedTrafficBytes, trafficLimitBytes}'
+id="${1:?usage: user-reset-traffic <id>}"
+need_id "$id"
+api POST "/api/users/$id/actions/reset-traffic" \
+  | jq '.response | {id, username, usedTrafficBytes: .userTraffic.usedTrafficBytes, trafficLimitBytes}'
