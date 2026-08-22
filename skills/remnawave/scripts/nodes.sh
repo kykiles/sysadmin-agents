@@ -3,6 +3,6 @@
 source "$(dirname "$0")/_lib.sh"
 api GET "/api/nodes" | jq '.response | map({
   uuid, name, countryCode, address, port,
-  isConnected, isNodeOnline, isDisabled,
+  isConnected, isConnecting, isDisabled, lastStatusMessage,
   usersOnline
 })'
