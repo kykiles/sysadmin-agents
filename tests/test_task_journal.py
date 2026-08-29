@@ -233,3 +233,13 @@ async def test_director_writes_first_line_as_summary(tmp_path):
     )
     await director.handle(Task(content="сколько юзеров на инбаунде", chat_id="c1"))
     assert j.search("юзеров инбаунд")[0]["summary"] == "На инбаунде 42 юзера."
+
+
+def test_transcript_saved_and_rotated(tmp_path):
+    j = TaskJournal(str(tmp_path / "t.db"))
+    for n in range(3):
+        j.save_transcript(f"task-{n}", f"body-{n}", keep=2)
+    assert j.transcript() == ("task-2", "body-2")
+    assert j.transcript(2) == ("task-1", "body-1")
+    # keep=2 вытеснил самый старый
+    assert j.transcript(3) is None

@@ -53,6 +53,10 @@ class TaskJournal(SqliteStore):
         # и плоского файла, который пришлось бы переиндексировать целиком.
         "CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5("
         "id UNINDEXED, intent, summary)",
+        # Полный ход последних задач: аргументы вызовов и вывод инструментов
+        # целиком, чего в логах нет — там превью в 200 символов.
+        "CREATE TABLE IF NOT EXISTS transcripts ("
+        "task_id TEXT PRIMARY KEY, ts TEXT NOT NULL, body TEXT NOT NULL)",
     )
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
@@ -123,3 +127,26 @@ class TaskJournal(SqliteStore):
              "tool_seq": json.loads(seq), "iterations": it, "success": bool(ok)}
             for i, intent, agent, seq, it, ok in rows
         ]
+
+    def save_transcript(self, task_id: str, body: str, keep: int) -> None:
+        """Сохранить ход задачи, оставив в базе только `keep` последних."""
+        ts = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO transcripts (task_id, ts, body) VALUES (?, ?, ?)",
+                (task_id, ts, body),
+            )
+            conn.execute(
+                "DELETE FROM transcripts WHERE task_id NOT IN "
+                "(SELECT task_id FROM transcripts ORDER BY ts DESC LIMIT ?)",
+                (keep,),
+            )
+
+    def transcript(self, back: int = 1) -> tuple[str, str] | None:
+        """`back`-й с конца транскрипт: (task_id, body). None, если столько нет."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT task_id, body FROM transcripts ORDER BY ts DESC LIMIT 1 OFFSET ?",
+                (max(back, 1) - 1,),
+            ).fetchone()
+        return row

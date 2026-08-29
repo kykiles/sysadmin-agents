@@ -73,7 +73,7 @@ async def test_set_bot_commands_registers_menu():
     bot.set_my_commands = AsyncMock()
     await set_bot_commands(bot)
     (commands,), _ = bot.set_my_commands.call_args
-    assert [c.command for c in commands] == ["start", "help", "reset", "learn", "reload"]
+    assert [c.command for c in commands] == ["start", "help", "reset", "learn", "reload", "trace"]
 
 
 def test_with_quote():

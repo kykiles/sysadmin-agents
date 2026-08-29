@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 from dataclasses import replace
 from functools import reduce
@@ -13,7 +14,7 @@ from app.agents.messages import Task, Result
 from app.bot.reports import save_report
 from app.config import settings
 from app.llm.client import LLMClient
-from app.logging import get_logger
+from app.logging import get_logger, redact
 from app.memory.facts import get_store
 from app.skills.loader import load_all_skills
 from app.memory.tools import build_tools as memory_tools
@@ -409,6 +410,12 @@ class Director(Agent):
                 iterations=result.iterations,
                 success=result.success,
                 summary=_summary(result.content),
+            )
+            await asyncio.to_thread(
+                self._journal.save_transcript,
+                task.id,
+                redact(json.dumps(result.transcript, ensure_ascii=False, indent=2)),
+                settings.journal_transcripts,
             )
         except Exception:
             log.exception("journal_write_failed", task_id=task.id)

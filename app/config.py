@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     reports_dir: str = Field(default="/tmp/reports", alias="REPORTS_DIR")
     journal_enabled: bool = Field(default=True, alias="JOURNAL_ENABLED")
     journal_db_path: str = Field(default="/data/tasks.db", alias="JOURNAL_DB_PATH")
+    journal_transcripts: int = Field(default=20, alias="JOURNAL_TRANSCRIPTS")
     deploy_allowed: str = Field(default="", alias="DEPLOY_ALLOWED")
     remnawave_base_url: str = Field(default="", alias="REMNAWAVE_BASE_URL")
     remnawave_api_key: str = Field(default="", alias="REMNAWAVE_API_KEY")

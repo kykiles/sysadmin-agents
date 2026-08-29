@@ -22,6 +22,9 @@ class Result(BaseModel):
     trace: list[str] = Field(default_factory=list)
     iterations: int = 0
     attachment: str = ""
+    # Полный ход задачи: то, что реально видела модель. Пишет в журнал только
+    # Директор — транскрипты спавнутых агентов умирают вместе с ними.
+    transcript: list[dict] = Field(default_factory=list)
 
 
 class ConfirmationRequest(BaseModel):

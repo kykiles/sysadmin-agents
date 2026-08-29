@@ -19,11 +19,12 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="reset", description="Очистить историю диалога"),
         BotCommand(command="learn", description="Самопроверка: повторы и устаревшие знания"),
         BotCommand(command="reload", description="Перечитать навыки"),
+        BotCommand(command="trace", description="Ход последней задачи файлом"),
     ])
 
 
 def create_dispatcher(*, director, gateway=None, memory, learning=None,
-                      reload_library=None) -> Dispatcher:
+                      reload_library=None, journal=None) -> Dispatcher:
     dp = Dispatcher()
     dp.include_router(build_router(
         director=director,
@@ -32,5 +33,6 @@ def create_dispatcher(*, director, gateway=None, memory, learning=None,
         memory=memory,
         learning=learning,
         reload_library=reload_library,
+        journal=journal,
     ))
     return dp

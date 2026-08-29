@@ -6,6 +6,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from app.agents.messages import Task, Result
 from app.bot.filters import WhitelistFilter
+from app.config import settings
 from app.bot.keyboards import review_markup
 from app.bot.render import render_answer, split_message
 from app.learning.review import render_review, resolve_fact, run_review
@@ -35,7 +36,7 @@ def with_quote(message: Message) -> str:
 
 
 def build_router(*, director, gateway=None, allowed_id: int, memory, learning=None,
-                 reload_library=None) -> Router:
+                 reload_library=None, journal=None) -> Router:
     router = Router()
 
     @router.message(WhitelistFilter(allowed_id), Command("start"))
@@ -53,7 +54,8 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
             "> /help — эта справка\n"
             "> /reset — очистить историю диалога\n"
             "> /learn — самопроверка: повторяющиеся задачи и устаревшие знания\n"
-            "> /reload — перечитать навыки после загрузки новых\n\n"
+            "> /reload — перечитать навыки после загрузки новых\n"
+            "> /trace [N] — ход N-й с конца задачи файлом (по умолчанию последней)\n\n"
             "Нужен отчёт файлом — попросите «оформи отчёт»."
         ))
 
@@ -73,6 +75,26 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
             await message.answer(f"Не перезагрузил: {e}")
             return
         await message.answer(f"Библиотека перечитана — {summary}.")
+
+    @router.message(WhitelistFilter(allowed_id), Command("trace"))
+    async def _trace(message: Message):
+        if journal is None:
+            await message.answer("Журнал выключен — транскриптов нет.")
+            return
+        arg = (message.text or "").split(maxsplit=1)
+        back = int(arg[1]) if len(arg) > 1 and arg[1].isdigit() else 1
+        row = await asyncio.to_thread(journal.transcript, back)
+        if row is None:
+            await message.answer("Столько задач в журнале нет.")
+            return
+        task_id, body = row
+        path = Path(settings.reports_dir) / f"trace-{task_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(path.write_text, body, "utf-8")
+        try:
+            await message.answer_document(FSInputFile(path), caption=f"Задача {task_id}")
+        finally:
+            path.unlink(missing_ok=True)
 
     @router.message(WhitelistFilter(allowed_id), Command("learn"))
     async def _learn(message: Message):

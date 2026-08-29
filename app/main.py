@@ -56,7 +56,8 @@ async def main() -> None:
 
     await set_bot_commands(bot)
     dp = create_dispatcher(director=director, gateway=gateway, memory=history,
-                           learning=learning, reload_library=reload_library)
+                           learning=learning, reload_library=reload_library,
+                           journal=journal)
 
     monitor_task: asyncio.Task | None = None
     if settings.monitor_enabled:
