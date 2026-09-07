@@ -1,7 +1,8 @@
 import json
 from unittest.mock import AsyncMock
 from pydantic import BaseModel
-from app.agents.base import Agent
+from app.agents.base import Agent, clamp_output
+from app.config import settings
 from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 from app.tools.base import Tool, Safety
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
@@ -271,3 +272,41 @@ async def test_reasoning_content_returned_to_model():
     await agent.handle(Task(content="do it"))
     assistant = next(m for m in llm.last_messages if m["role"] == "assistant")
     assert assistant["reasoning_content"] == "думаю"
+
+
+def test_clamp_output_leaves_short_text_alone():
+    assert clamp_output("короткий вывод", 100) == "короткий вывод"
+
+
+def test_clamp_output_disabled_by_zero():
+    assert clamp_output("x" * 1000, 0) == "x" * 1000
+
+
+def test_clamp_output_keeps_head_and_tail():
+    text = "НАЧАЛО" + "m" * 1000 + "КОНЕЦ"
+    out = clamp_output(text, 100)
+    assert out.startswith("НАЧАЛО")
+    assert out.endswith("КОНЕЦ")
+    assert "вырезано 911 символов" in out
+
+
+async def test_long_tool_output_reaches_model_clamped(monkeypatch):
+    """Логи на мегабайт не должны уезжать в контекст целиком."""
+    long_line = "L" * 5000
+
+    class Big(BaseModel):
+        pass
+
+    async def _big() -> str:
+        return long_line
+
+    tool = Tool(name="big", description="d", params_model=Big, fn=_big, safety=Safety.SAFE)
+    tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="big", arguments="{}"))])
+    final = ChoiceMessage(content="готово", tool_calls=None)
+    llm = FakeLLM([tc, final])
+    monkeypatch.setattr(settings, "tool_output_max_chars", 200)
+    agent = Agent(name="t", system_prompt="sys", tools=[tool], llm=llm)
+    await agent.handle(Task(content="дай логи"))
+    tool_msg = next(m for m in llm.last_messages if m["role"] == "tool")
+    assert len(tool_msg["content"]) < 300
+    assert "вырезано" in tool_msg["content"]

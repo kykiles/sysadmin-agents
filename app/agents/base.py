@@ -15,6 +15,21 @@ log = get_logger("agent")
 _BAD_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu]|u[0-9a-fA-F]{4})')
 
 
+def clamp_output(text: str, limit: int) -> str:
+    """Режет середину вывода, оставляя начало и хвост.
+
+    Начало нужно, потому что там заголовок и первая ошибка; хвост — потому что
+    у логов и длинных команд итог в конце. Середина логов обычно однородна.
+    Обрезка касается только того, что уходит в контекст модели: аудит и журнал
+    задачи пишут полный вывод до этого места.
+    """
+    if limit <= 0 or len(text) <= limit:
+        return text
+    head = limit // 2
+    tail = limit - head
+    return f"{text[:head]}\n… вырезано {len(text) - limit} символов …\n{text[-tail:]}"
+
+
 def parse_args(raw: str | None) -> dict:
     raw = raw or "{}"
     try:
@@ -160,7 +175,8 @@ class Agent:
             await flush()
 
             for tc, out in zip(msg.tool_calls, outs):
-                messages.append({"role": "tool", "tool_call_id": tc.id, "content": out})
+                content = clamp_output(out, settings.tool_output_max_chars)
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
         limit = settings.agent_max_iterations
         note = f"достигнут лимит итераций ({limit}), ответ может быть неполным"
         content = "\n\n".join([*said, note])

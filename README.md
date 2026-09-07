@@ -62,6 +62,7 @@ cp .env.example .env
 | `LLM_MODEL` | `deepseek-chat` | ID модели (сейчас в бою — `deepseek/deepseek-v4-flash-0731`) |
 | `COMPOSE_PROJECTS_DIR` | `/opt` | Директория с compose-проектами |
 | `AGENT_MAX_ITERATIONS` | `25` | Лимит итераций LLM↔tools |
+| `TOOL_OUTPUT_MAX_CHARS` | `8000` | Бюджет вывода одного инструмента в контексте; `0` — без обрезки |
 | `CONFIRMATION_TIMEOUT_SECONDS` | `300` | Таймаут подтверждения (сек) |
 | `AUDIT_LOG_PATH` | `/data/audit.log` | Путь к аудит-логу |
 | `DIALOG_DB_PATH` | `/data/dialog.db` | Путь к SQLite-базе диалоговой памяти |

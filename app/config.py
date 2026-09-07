@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     compose_projects_dir: str = Field(default="/opt", alias="COMPOSE_PROJECTS_DIR")
     shell_timeout_seconds: int = Field(default=120, alias="SHELL_TIMEOUT_SECONDS")
     agent_max_iterations: int = Field(default=25, alias="AGENT_MAX_ITERATIONS")
+    # Вывод инструмента уходит в контекст целиком и остаётся там до конца задачи:
+    # один journalctl без -n на 25 итераций переполняет окно и роняет запрос в 400.
+    # 8000 символов — это ~150 строк лога, диагностике хватает. 0 отключает обрезку.
+    tool_output_max_chars: int = Field(default=8000, alias="TOOL_OUTPUT_MAX_CHARS")
     confirmation_timeout_seconds: int = Field(
         default=300, alias="CONFIRMATION_TIMEOUT_SECONDS"
     )
