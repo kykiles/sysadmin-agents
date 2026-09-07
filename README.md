@@ -58,8 +58,8 @@ cp .env.example .env
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI-совместимый endpoint |
-| `LLM_MODEL` | `deepseek-chat` | ID модели |
+| `LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI-совместимый endpoint (сейчас в бою — `https://openrouter.ai/api/v1`) |
+| `LLM_MODEL` | `deepseek-chat` | ID модели (сейчас в бою — `deepseek/deepseek-v4-flash-0731`) |
 | `COMPOSE_PROJECTS_DIR` | `/opt` | Директория с compose-проектами |
 | `AGENT_MAX_ITERATIONS` | `25` | Лимит итераций LLM↔tools |
 | `CONFIRMATION_TIMEOUT_SECONDS` | `300` | Таймаут подтверждения (сек) |
