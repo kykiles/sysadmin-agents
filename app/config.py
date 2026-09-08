@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     lint_stale_snapshot_days: int = Field(default=14, alias="LINT_STALE_SNAPSHOT_DAYS")
     lint_remind_days: int = Field(default=30, alias="LINT_REMIND_DAYS")
     lint_max_items: int = Field(default=10, alias="LINT_MAX_ITEMS")
+    # Потолок оглавления памяти в промпте Директора. Не «сколько влезет», а
+    # сколько мы согласны платить за него в каждой задаче: дальше растёт база,
+    # а не контекст.
+    memory_index_token_budget: int = Field(default=800, alias="MEMORY_INDEX_TOKEN_BUDGET")
+    # Окно консолидации: сколько часов журнала обобщать за один проход самопроверки.
+    # По умолчанию сутки — ровно период LEARN_EVERY_TICKS.
+    consolidate_hours: int = Field(default=24, alias="CONSOLIDATE_HOURS")
+    consolidate_max_items: int = Field(default=5, alias="CONSOLIDATE_MAX_ITEMS")
 
 
 @lru_cache(maxsize=1)

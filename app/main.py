@@ -40,6 +40,8 @@ async def main() -> None:
     learning = LearningContext(
         facts=get_store(),
         lint=LintState(settings.journal_db_path),
+        llm=llm,
+        journal=journal,
     ) if journal is not None else None
     bot = create_bot()
     gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)

@@ -98,5 +98,5 @@ def test_lint_does_not_modify_facts(tmp_path):
     state.mark_reported(find_stale(store, state, now=NOW, **DEFAULTS), NOW)
 
     assert store.recall() == [
-        {"scope": "host-a", "key": "ssh_port", "value": "2222", "kind": "snapshot"}
+        {"scope": "host-a", "key": "ssh_port", "value": "2222", "kind": "snapshot", "description": ""}
     ]

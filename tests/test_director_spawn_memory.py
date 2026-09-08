@@ -117,8 +117,9 @@ def test_memory_index_lists_keys_not_values(tmp_path):
     store.remember("global", "timezone", "UTC")
 
     idx = _memory_index()
-    assert "docker: compose_path, engine_version" in idx
-    assert "global: timezone" in idx
+    assert "- docker:" in idx
+    assert "compose_path" in idx and "engine_version" in idx
+    assert "- global:" in idx and "timezone" in idx
     assert "/opt/app" not in idx  # значения в промпт не попадают
 
 
@@ -195,3 +196,34 @@ async def test_fact_from_an_ordinary_task_is_not_flagged(tmp_path):
     await d.handle(Task(content="запомни"))
 
     assert facts.get_store().tainted() == []
+
+
+def test_memory_index_collapses_tail_when_budget_spent():
+    """Оглавление не растёт вместе с базой: хвост схлопывается в одну строку."""
+    from app.agents.director import _render_index
+
+    area = {"scope": "host", "facts": [
+        {"key": f"key_{i}", "description": "довольно длинное описание факта"} for i in range(50)
+    ]}
+    lines = _render_index([area], token_budget=40)
+
+    assert lines[-1].startswith("  - ... ещё ")
+    assert sum(len(l) // 4 + 1 for l in lines[:-1]) <= 40
+
+
+async def test_remember_fact_shows_similar_but_writes_anyway(tmp_path):
+    """Дубль под другим ключом Директор увидит в ответе инструмента — но запись
+    не блокируем: двухходовка заставила бы его избегать remember_fact."""
+    facts.init_store(str(tmp_path / "f.db"))
+    facts.get_store().remember("bot", "dialog_db", "история диалога в /data/dialog.db")
+    llm = FakeLLM([
+        _call("remember_fact", {"scope": "bot", "key": "history_path",
+                                "value": "диалог хранится в /data/dialog.db"}),
+        ChoiceMessage(content="готово", tool_calls=None),
+    ])
+    d = Director(llm=llm, skills=_skill())
+    await d.handle(Task(content="запомни"))
+
+    result = next(m for m in llm.seen[-1] if m.get("role") == "tool")
+    assert "dialog_db" in result["content"]
+    assert {f["key"] for f in facts.get_store().recall()} == {"dialog_db", "history_path"}

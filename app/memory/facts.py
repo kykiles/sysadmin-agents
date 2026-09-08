@@ -16,54 +16,110 @@ class KnowledgeStore(SqliteStore):
         # API). Инструкция, внедрённая в такой текст, осела бы в памяти навсегда —
         # поэтому такие факты показываются человеку на самопроверке.
         "tainted INTEGER NOT NULL DEFAULT 0, "
+        # «Когда это пригодится» — по описанию факт попадает в задачу, формулировка
+        # которой с ключом не совпадает. Пустое описание легально: старые факты
+        # показываются одним ключом, как раньше.
+        "description TEXT NOT NULL DEFAULT '', "
+        # Сила факта: сколько раз он попадал в адресный recall и когда в последний.
+        # По ней сортируется оглавление — неиспользуемое уезжает вниз и вытесняется
+        # из бюджета, но остаётся в базе и достаётся точечным запросом.
+        "hits INTEGER NOT NULL DEFAULT 0, "
+        "last_used TEXT NOT NULL DEFAULT '', "
         "PRIMARY KEY (scope, key))",
     )
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         self._add_column(conn, "facts", "kind", "TEXT NOT NULL DEFAULT 'stable'")
         self._add_column(conn, "facts", "tainted", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column(conn, "facts", "description", "TEXT NOT NULL DEFAULT ''")
+        self._add_column(conn, "facts", "hits", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column(conn, "facts", "last_used", "TEXT NOT NULL DEFAULT ''")
 
     def remember(self, scope: str, key: str, value: str, kind: str = "stable",
-                 tainted: bool = False) -> None:
+                 tainted: bool = False, description: str = "") -> None:
         ts = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO facts (scope, key, value, ts, kind, tainted) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
+                "INSERT INTO facts (scope, key, value, ts, kind, tainted, description) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(scope, key) DO UPDATE SET "
                 "value = excluded.value, ts = excluded.ts, kind = excluded.kind, "
-                "tainted = excluded.tainted",
-                (scope, key, value, ts, kind, int(tainted)),
+                "tainted = excluded.tainted, description = excluded.description",
+                (scope, key, value, ts, kind, int(tainted), description),
             )
 
     def recall(self, scope: str | None = None, query: str | None = None) -> list[dict]:
-        sql = "SELECT scope, key, value, kind FROM facts"
+        sql = "SELECT scope, key, value, kind, description FROM facts"
         conds: list[str] = []
         params: list[str] = []
         if scope is not None:
             conds.append("scope = ?")
             params.append(scope)
         if query is not None:
-            conds.append("(key LIKE ? OR value LIKE ?)")
-            params.extend([f"%{query}%", f"%{query}%"])
+            conds.append("(key LIKE ? OR value LIKE ? OR description LIKE ?)")
+            params.extend([f"%{query}%"] * 3)
         if conds:
             sql += " WHERE " + " AND ".join(conds)
         sql += " ORDER BY scope, key"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [{"scope": s, "key": k, "value": v, "kind": kind} for s, k, v, kind in rows]
+        facts = [{"scope": s, "key": k, "value": v, "kind": kind, "description": d}
+                 for s, k, v, kind, d in rows]
+        # Хит засчитываем только адресному запросу: дамп всей памяти одним вызовом
+        # поднял бы силу всем фактам разом и стёр разницу между ними.
+        if conds:
+            self._touch([(f["scope"], f["key"]) for f in facts])
+        return facts
 
-    def keys(self) -> list[dict]:
-        """Оглавление памяти: области и ключи фактов в каждой. По ключам Директор
-        решает, что уже известно и куда углубляться, не вычитывая значения."""
+    def _touch(self, keys: list[tuple[str, str]]) -> None:
+        if not keys:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.executemany(
+                "UPDATE facts SET hits = hits + 1, last_used = ? WHERE scope = ? AND key = ?",
+                [(now, s, k) for s, k in keys],
+            )
+
+    def similar(self, scope: str, key: str, text: str, limit: int = 3) -> list[dict]:
+        """Факты, похожие на записываемый, кроме него самого.
+
+        `PRIMARY KEY (scope, key)` ловит только буквальный дубль: тот же факт под
+        другим именем ключа мирно сосуществует со старым, и дальше непонятно, какой
+        верен. Ищем по словам значения и описания — грубо, зато без индекса.
+        """
+        words = sorted({w for w in text.lower().split() if len(w) >= 5}, key=len, reverse=True)
+        if not words:
+            return []
+        conds = " OR ".join(["(lower(value) LIKE ? OR lower(description) LIKE ?)"] * len(words[:5]))
+        params: list[str] = []
+        for w in words[:5]:
+            params.extend([f"%{w}%"] * 2)
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT scope, key FROM facts ORDER BY scope, key"
+                f"SELECT scope, key, value FROM facts WHERE ({conds}) "
+                "AND NOT (scope = ? AND key = ?) ORDER BY hits DESC LIMIT ?",
+                (*params, scope, key, limit),
             ).fetchall()
-        index: dict[str, list[str]] = {}
-        for scope, key in rows:
-            index.setdefault(scope, []).append(key)
-        return [{"scope": s, "keys": k} for s, k in index.items()]
+        return [{"scope": s, "key": k, "value": v} for s, k, v in rows]
+
+    def index(self) -> list[dict]:
+        """Оглавление памяти: области, а в них факты с описанием, сильные первыми.
+
+        По ключам Директор решает, что уже известно и куда углубляться, не вычитывая
+        значения; описание подсказывает, когда факт пригодится, если формулировка
+        задачи с ключом не совпадает. Порядок задаёт силу: что не используется,
+        уезжает в хвост и первым вылетает за бюджет промпта.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT scope, key, description FROM facts "
+                "ORDER BY scope, hits DESC, last_used DESC, ts DESC"
+            ).fetchall()
+        index: dict[str, list[dict]] = {}
+        for scope, key, description in rows:
+            index.setdefault(scope, []).append({"key": key, "description": description})
+        return [{"scope": s, "facts": f} for s, f in index.items()]
 
     def all_with_ts(self) -> list[dict]:
         """Все факты вместе с меткой времени — для lint'а. Инструментам памяти `ts`

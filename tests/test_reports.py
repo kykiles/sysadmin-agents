@@ -47,7 +47,7 @@ def test_creates_missing_directory(tmp_path):
 
 
 async def test_director_exposes_report_path_as_attachment(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.agents.director.settings", type("S", (), {"reports_dir": str(tmp_path)})())
+    monkeypatch.setattr("app.agents.director.settings", type("S", (), {"reports_dir": str(tmp_path), "memory_index_token_budget": 800})())
     call = ChoiceMessage(content=None, tool_calls=[ToolCall(
         id="c1",
         function=ToolCallFunction(name="make_report", arguments=json.dumps(
@@ -63,7 +63,7 @@ async def test_director_exposes_report_path_as_attachment(tmp_path, monkeypatch)
 
 
 async def test_attachment_resets_between_tasks(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.agents.director.settings", type("S", (), {"reports_dir": str(tmp_path)})())
+    monkeypatch.setattr("app.agents.director.settings", type("S", (), {"reports_dir": str(tmp_path), "memory_index_token_budget": 800})())
     call = ChoiceMessage(content=None, tool_calls=[ToolCall(
         id="c1",
         function=ToolCallFunction(name="make_report", arguments=json.dumps(

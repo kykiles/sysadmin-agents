@@ -1,0 +1,74 @@
+"""Консолидация: обобщение прошедших задач в предложения записать факт.
+
+Директор пишет память в момент задачи и неизбежно что-то не записывает — решение
+казалось разовым, а повторилось. Раз в сутки проходим по журналу и предлагаем то,
+чего в памяти нет. Предлагаем, а не пишем: LLM задним числом знает хуже, чем
+Директор в моменте (ровно на этом умер детектор повторов, см. docs/adr/0004), и
+человек должен видеть, что оседает в памяти навсегда.
+
+Вход — журнал (интент + итог), а не транскрипты: транскриптов хранится два
+десятка, за сутки задач может быть больше, и полный ход двадцати задач стоит
+десятки тысяч токенов там, где хватает двух строк на задачу.
+"""
+import json
+
+from app.logging import get_logger
+
+log = get_logger("learning.consolidate")
+
+_PROMPT = (
+    "Ты разбираешь журнал работы админской системы за прошедшие сутки и решаешь, "
+    "чего не хватает в её долговременной памяти.\n\n"
+    "Оглавление памяти (области и ключи фактов):\n{index}\n\n"
+    "Задачи за период (что просили → чем кончилось):\n{tasks}\n\n"
+    "Предложи не больше {limit} фактов, которые стоит запомнить: топология, пути, "
+    "версии, принятые решения, договорённости — то, что понадобится в следующей "
+    "задаче. Не предлагай: разовые находки (что было в этих логах, почему упал этот "
+    "запрос), то, что уже есть в оглавлении, и то, что легко узнать заново одной "
+    "командой.\n"
+    "Ответь ТОЛЬКО массивом JSON, без пояснений: "
+    '[{{"scope": "тема", "key": "snake_case", "value": "значение", '
+    '"description": "когда пригодится"}}]. Пустой массив — нормальный ответ.'
+)
+
+
+def _render_index(index: list[dict]) -> str:
+    if not index:
+        return "(пусто)"
+    return "\n".join(
+        f"- {a['scope']}: {', '.join(f['key'] for f in a['facts'])}" for a in index
+    )
+
+
+def _render_tasks(tasks: list[dict]) -> str:
+    return "\n".join(f"- {t['intent']} → {t.get('summary') or ''}" for t in tasks)
+
+
+def _parse(content: str, limit: int) -> list[dict]:
+    raw = (content or "").strip()
+    start, end = raw.find("["), raw.rfind("]")
+    if start < 0 or end < start:
+        return []
+    try:
+        items = json.loads(raw[start:end + 1])
+    except json.JSONDecodeError:
+        log.warning("consolidate_bad_json")
+        return []
+    out = []
+    for it in items[:limit]:
+        if isinstance(it, dict) and it.get("scope") and it.get("key") and it.get("value"):
+            out.append({"scope": str(it["scope"]), "key": str(it["key"]),
+                        "value": str(it["value"]), "description": str(it.get("description", ""))})
+    return out
+
+
+async def propose(llm, journal, facts, *, hours: int, limit: int) -> list[dict]:
+    """Что стоило бы помнить по итогам последних `hours` часов. Ничего не пишет."""
+    tasks = journal.recent_with_summary(hours)
+    if not tasks:
+        return []
+    index = facts.index()
+    known = {(a["scope"], f["key"]) for a in index for f in a["facts"]}
+    prompt = _PROMPT.format(index=_render_index(index), tasks=_render_tasks(tasks), limit=limit)
+    msg = await llm.chat([{"role": "user", "content": prompt}])
+    return [p for p in _parse(msg.content, limit) if (p["scope"], p["key"]) not in known]

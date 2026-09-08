@@ -148,3 +148,62 @@ async def test_review_shows_facts_from_untrusted_sources(tmp_path):
     assert [f["key"] for f in outcome.tainted] == ["asn"]
     assert "недоверенного источника" in render_review(outcome)
     assert not outcome.is_empty
+
+
+# ---------- консолидация ----------
+
+@pytest.mark.asyncio
+async def test_review_suggests_facts_from_journal(tmp_path):
+    from app.memory.journal import TaskJournal
+
+    journal = TaskJournal(str(tmp_path / "tasks.db"))
+    journal.record(task_id="1", chat_id="c", intent="почему упал бот", agents=[],
+                   tool_seq=[], iterations=1, success=True, summary="перезапустили compose")
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(content=(
+        'вот: [{"scope": "bot", "key": "restart_cmd", "value": "docker compose restart", '
+        '"description": "когда бот не отвечает"}]'
+    )))
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = llm, journal
+
+    outcome = await run_review(ctx)
+
+    assert [f["key"] for f in outcome.suggested] == ["restart_cmd"]
+    # предложение ждёт кнопки, в память само не садится
+    assert ctx.facts.recall() == []
+    assert list(ctx.pending) == [short_id("bot", "restart_cmd")]
+    assert "Предлагаю запомнить" in render_review(outcome)
+
+
+@pytest.mark.asyncio
+async def test_consolidation_skips_facts_already_known(tmp_path):
+    from app.memory.journal import TaskJournal
+
+    journal = TaskJournal(str(tmp_path / "tasks.db"))
+    journal.record(task_id="1", chat_id="c", intent="i", agents=[], tool_seq=[],
+                   iterations=1, success=True, summary="s")
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(
+        content='[{"scope": "bot", "key": "restart_cmd", "value": "docker compose restart"}]'))
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = llm, journal
+    ctx.facts.remember("bot", "restart_cmd", "docker compose restart")
+
+    outcome = await run_review(ctx)
+
+    assert outcome.suggested == []
+
+
+@pytest.mark.asyncio
+async def test_review_survives_broken_consolidation(tmp_path):
+    llm = MagicMock()
+    llm.chat = AsyncMock(side_effect=RuntimeError("апстрим лёг"))
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = llm, MagicMock(recent_with_summary=lambda hours: [{"intent": "i", "summary": "s"}])
+    _seed_stale_fact(ctx)
+
+    outcome = await run_review(ctx)
+
+    assert [f.key for f in outcome.stale] == ["ssh_port"]
+    assert outcome.suggested == []

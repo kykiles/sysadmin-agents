@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.config import settings
+from app.learning.consolidate import propose
 from app.learning.lint import LintState, StaleFact, find_stale
 from app.logging import get_logger
 
@@ -18,16 +19,23 @@ def short_id(*parts: str) -> str:
 class LearningContext:
     facts: object
     lint: LintState
+    llm: object | None = None
+    journal: object | None = None
+    # Предложения консолидации ждут кнопки в Telegram и потому живут в процессе,
+    # а не в базе: не подтверждённое до перезапуска предложение просто вернётся
+    # следующим проходом.
+    pending: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
 class ReviewOutcome:
     stale: list[StaleFact] = field(default_factory=list)
     tainted: list[dict] = field(default_factory=list)
+    suggested: list[dict] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        return not self.stale and not self.tainted
+        return not self.stale and not self.tainted and not self.suggested
 
 
 async def run_review(ctx: LearningContext) -> ReviewOutcome:
@@ -44,7 +52,20 @@ async def run_review(ctx: LearningContext) -> ReviewOutcome:
         ctx.lint.mark_reported(stale, datetime.now(timezone.utc))
     except Exception:
         log.exception("lint_pass_failed")
-    return ReviewOutcome(stale=stale, tainted=ctx.facts.tainted()[:settings.lint_max_items])
+
+    suggested: list[dict] = []
+    if ctx.llm is not None and ctx.journal is not None:
+        try:
+            suggested = await propose(
+                ctx.llm, ctx.journal, ctx.facts,
+                hours=settings.consolidate_hours,
+                limit=settings.consolidate_max_items,
+            )
+        except Exception:
+            log.exception("consolidate_failed")
+    ctx.pending = {short_id(p["scope"], p["key"]): p for p in suggested}
+    return ReviewOutcome(stale=stale, tainted=ctx.facts.tainted()[:settings.lint_max_items],
+                         suggested=suggested)
 
 
 def resolve_fact(facts, sid: str) -> tuple[str, str] | None:
@@ -65,6 +86,11 @@ def render_review(outcome: ReviewOutcome) -> str:
     if outcome.tainted:
         lines = ["**Записано со слов недоверенного источника**", ""]
         for f in outcome.tainted:
+            lines.append(f"> `{f['scope']}/{f['key']}` = {f['value']}")
+        blocks.append("\n".join(lines))
+    if outcome.suggested:
+        lines = ["**Предлагаю запомнить**", ""]
+        for f in outcome.suggested:
             lines.append(f"> `{f['scope']}/{f['key']}` = {f['value']}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
