@@ -243,3 +243,31 @@ def test_transcript_saved_and_rotated(tmp_path):
     assert j.transcript(2) == ("task-1", "body-1")
     # keep=2 вытеснил самый старый
     assert j.transcript(3) is None
+
+
+async def test_summary_skips_preambles_of_tool_turns(tmp_path):
+    """Живой случай: Директор по дороге писал «сейчас посмотрю», и в журнал уезжала
+    первая такая реплика вместо вывода задачи."""
+    j = _journal(tmp_path)
+    director = Director(
+        llm=FakeLLM([
+            ChoiceMessage(
+                content="Разберусь. Сначала подниму память по базе бота.",
+                tool_calls=[ToolCall(id="c1", function=ToolCallFunction(
+                    name="recall_facts", arguments="{}"))],
+            ),
+            ChoiceMessage(
+                content="Разобрал полностью: подписка активна до 2027-03-07.\n\n> детали",
+                tool_calls=None,
+            ),
+        ]),
+        journal=j,
+        skills=_skill_with("recall_facts"),
+    )
+    result = await director.handle(Task(content="почему подписка expired", chat_id="c1"))
+    # пользователю уходит всё, включая преамбулу
+    assert "Разберусь." in result.content
+    # а в журнал — итог финального хода
+    assert j.search("подписка expired")[0]["summary"] == (
+        "Разобрал полностью: подписка активна до 2027-03-07."
+    )

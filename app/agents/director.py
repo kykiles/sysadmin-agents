@@ -225,8 +225,8 @@ def _render_index(index: list[dict], token_budget: int) -> list[str]:
 def _summary(content: str) -> str:
     """Итог задачи одной фразой для журнала.
 
-    Формат ответа Директора требует итог первой строкой — берём её и не платим
-    лишним вызовом модели за резюме.
+    Формат ответа Директора требует итог первой строкой финального хода — берём её
+    и не платим лишним вызовом модели за резюме.
     """
     line = next((s for s in (ln.strip() for ln in content.splitlines()) if s), "")
     return line[:300]
@@ -443,7 +443,7 @@ class Director(Agent):
                 tool_seq=result.trace + self._sub_trace,
                 iterations=result.iterations,
                 success=result.success,
-                summary=_summary(result.content),
+                summary=_summary(result.final or result.content),
             )
             await asyncio.to_thread(
                 self._journal.save_transcript,

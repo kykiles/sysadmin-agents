@@ -9,9 +9,18 @@ _SECRET = re.compile(
     r"|(?<=Bearer )[A-Za-z0-9._~+/=-]{8,}"                     # Bearer <token>
 )
 
+# Агент собирает строку подключения к БД руками: `PGPASSWORD=... psql` и
+# `postgresql://user:pass@host`. И то и другое оседало в audit.jsonl открытым текстом.
+_ASSIGN = re.compile(
+    r"(?i)\b(\w*(?:password|passwd|secret|token|api_?key)\w*\s*=\s*)([^\s\"'\\,}]+)"
+)
+_URL_CRED = re.compile(r"(://[^\s:/@\"']+:)([^\s@\"'\\]+)(?=@)")
+
 
 def redact(text: str) -> str:
-    return _SECRET.sub("<redacted>", text)
+    text = _SECRET.sub("<redacted>", text)
+    text = _ASSIGN.sub(r"\1<redacted>", text)
+    return _URL_CRED.sub(r"\1<redacted>", text)
 
 
 def setup_logging() -> None:

@@ -128,6 +128,7 @@ class Agent:
                     await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
                     await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
                 return Result(task_id=task.id, content=content,
+                              final=(msg.content or "").strip(),
                               trace=trace, iterations=iterations,
                               transcript=[*messages, {"role": "assistant", "content": content}])
             if msg.content:
@@ -184,5 +185,5 @@ class Agent:
             await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
             await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
         return Result(task_id=task.id, content=content, success=False,
-                      trace=trace, iterations=iterations,
+                      final=note, trace=trace, iterations=iterations,
                       transcript=[*messages, {"role": "assistant", "content": content}])
