@@ -54,7 +54,7 @@ def hwid():
 
 def fetch(url):
     """Перебирает User-Agent'ы, пока панель не отдаст непустое тело."""
-    last, hw = "", hwid()
+    last, stub, hw = "", "", hwid()
     for ua in UAS:
         h = {"User-Agent": ua, "Accept": "*/*",
              "x-hwid": hw, "x-device-os": "android", "x-ver-os": "14",
@@ -81,11 +81,15 @@ def fetch(url):
                 last = f"формат не разобран на UA={ua}"
                 continue
             last = ("заглушка" if body else "пустое тело") + f" на UA={ua}"
+            if body:
+                stub = last
         except ValueError:
             raise
         except Exception as e:
             last = f"{ua}: {e}"
-    raise ValueError(f"не удалось скачать подписку ({last})")
+    # Заглушка объясняет отказ лучше, чем «не разобран» от поздних UA:
+    # браузерному панель обычно отдаёт HTML-страницу.
+    raise ValueError(f"не удалось скачать подписку ({stub or last})")
 
 
 # --- parse ------------------------------------------------------------------

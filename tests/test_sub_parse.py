@@ -80,4 +80,30 @@ assert "метка страны не совпадает" in md, "FI-метка �
 assert "Точек входа в России: 1" in md
 print("ok  render")
 
+
+# fetch: заглушка на клиентских UA не теряется за «не разобран» от браузерного
+import io, tempfile
+from skills.subscription import analyze
+
+STUB_BODY = b64("vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1"
+                "#❌ Ваше приложение не поддерживается.").encode()
+
+
+def _urlopen(req, timeout):
+    ua = req.get_header("User-agent")
+    return io.BytesIO(b"<html>login</html>" if ua.startswith("Mozilla") else STUB_BODY)
+
+
+analyze.HWID_FILE = tempfile.mkdtemp() + "/hwid.txt"
+orig = analyze.urllib.request.urlopen
+analyze.urllib.request.urlopen = _urlopen
+try:
+    analyze.fetch("https://sub.example.com/x")
+    raise AssertionError("fetch должен был упасть")
+except ValueError as e:
+    assert "заглушка" in str(e), str(e)
+finally:
+    analyze.urllib.request.urlopen = orig
+print("ok  fetch: заглушка в ошибке")
+
 print("\nвсе проверки пройдены")
