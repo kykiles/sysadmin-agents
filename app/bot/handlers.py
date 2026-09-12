@@ -5,7 +5,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from app.agents.messages import Task, Result
-from app.bot.filters import WhitelistFilter
+from app.bot.filters import OwnerCallbackFilter, WhitelistFilter
 from app.config import settings
 from app.bot.keyboards import review_markup
 from app.bot.render import render_answer, split_message
@@ -38,12 +38,17 @@ def with_quote(message: Message) -> str:
 def build_router(*, director, gateway=None, allowed_id: int, memory, learning=None,
                  reload_library=None, journal=None) -> Router:
     router = Router()
+    # Один фильтр на все сообщения и все кнопки (cf:, lf:, sf:): владелец в личном
+    # чате. Раньше whitelist стоял только на сообщениях, callbacks проверяли
+    # лишь префикс (аудит 2026-09-12, F06).
+    router.message.filter(WhitelistFilter(allowed_id))
+    router.callback_query.filter(OwnerCallbackFilter(allowed_id))
 
-    @router.message(WhitelistFilter(allowed_id), Command("start"))
+    @router.message(Command("start"))
     async def _start(message: Message):
         await message.answer("Система активна. Опишите задачу.")
 
-    @router.message(WhitelistFilter(allowed_id), Command("help"))
+    @router.message(Command("help"))
     async def _help(message: Message):
         await message.answer(render_answer(
             "Опишите задачу обычным текстом — Директор разберёт её и под задачу "
@@ -59,12 +64,12 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
             "Нужен отчёт файлом — попросите «оформи отчёт»."
         ))
 
-    @router.message(WhitelistFilter(allowed_id), Command("reset"))
+    @router.message(Command("reset"))
     async def _reset(message: Message):
         await asyncio.to_thread(memory.clear, str(message.chat.id))
         await message.answer("История диалога очищена.")
 
-    @router.message(WhitelistFilter(allowed_id), Command("reload"))
+    @router.message(Command("reload"))
     async def _reload(message: Message):
         if reload_library is None:
             await message.answer("Перезагрузка библиотеки недоступна.")
@@ -76,7 +81,7 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
             return
         await message.answer(f"Библиотека перечитана — {summary}.")
 
-    @router.message(WhitelistFilter(allowed_id), Command("trace"))
+    @router.message(Command("trace"))
     async def _trace(message: Message):
         if journal is None:
             await message.answer("Журнал выключен — транскриптов нет.")
@@ -96,7 +101,7 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         finally:
             path.unlink(missing_ok=True)
 
-    @router.message(WhitelistFilter(allowed_id), Command("learn"))
+    @router.message(Command("learn"))
     async def _learn(message: Message):
         if learning is None:
             await message.answer("Самопроверка выключена (нет журнала задач).")
@@ -126,7 +131,7 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
             learning.facts.forget(*found)
         await callback.answer("Факт забыт" if found else "Факт не найден")
 
-    @router.message(WhitelistFilter(allowed_id))
+    @router.message()
     async def _task(message: Message):
         task = Task(content=with_quote(message), chat_id=str(message.chat.id))
         try:

@@ -96,6 +96,133 @@ def test_with_quote():
     assert "порт 80" in out and "nginx" not in out
 
 
+# ---------- авторизация через router: сообщения и все семейства кнопок (аудит F06) ----------
+
+import pytest
+from aiogram.types import Chat, InaccessibleMessage
+
+# Кто нажимает кнопку с корректным callback_data, но права не имеет.
+REFUSED = [
+    pytest.param(dict(user=999), id="other-user"),
+    pytest.param(dict(chat_type="group", chat_id=-100), id="owner-in-group"),
+    pytest.param(dict(chat_type="supergroup", chat_id=-100), id="owner-in-supergroup"),
+    pytest.param(dict(message="inaccessible"), id="inaccessible-message"),
+    pytest.param(dict(message=None), id="no-message"),
+]
+
+
+def _cb(data, *, user=1, chat_type="private", chat_id=1, message="ok"):
+    cb = MagicMock()
+    cb.data = data
+    cb.from_user.id = user
+    cb.answer = AsyncMock()
+    if message == "inaccessible":
+        cb.message = InaccessibleMessage(chat=Chat(id=chat_id, type=chat_type), message_id=5)
+    elif message is None:
+        cb.message = None
+    else:
+        cb.message.chat.type = chat_type
+        cb.message.chat.id = chat_id
+        cb.message.html_text = "Подтвердите"
+        cb.message.edit_text = AsyncMock()
+    return cb
+
+
+def _router(**kwargs):
+    from app.bot.handlers import build_router
+    return build_router(director=kwargs.pop("director", FakeDirector("ok")), allowed_id=1,
+                        memory=MagicMock(), **kwargs)
+
+
+def _gateway_with_pending():
+    bot = MagicMock(); bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+    gw = TelegramConfirmationGateway(bot, chat_id=1, timeout=30)
+    fut = asyncio.get_event_loop().create_future()
+    gw._pending["t1"] = fut
+    return gw, fut
+
+
+@pytest.mark.parametrize("caller", REFUSED)
+@pytest.mark.parametrize("choice", ["yes", "all", "no"])
+async def test_confirm_callback_refused(caller, choice):
+    gw, fut = _gateway_with_pending()
+    await _router(gateway=gw).propagate_event(
+        update_type="callback_query", event=_cb(f"cf:t1:{choice}", **caller))
+    assert not fut.done()
+    assert gw._scoped == set()
+
+
+async def test_confirm_callback_owner_in_private_chat():
+    gw, fut = _gateway_with_pending()
+    await _router(gateway=gw).propagate_event(update_type="callback_query", event=_cb("cf:t1:yes"))
+    assert fut.result() is Decision.APPROVED
+
+
+def _learning():
+    learning = MagicMock()
+    learning.pending = {"s1": {"scope": "infra", "key": "k", "value": "v"}}
+    return learning
+
+
+@pytest.mark.parametrize("caller", REFUSED)
+async def test_suggested_fact_callback_refused(caller):
+    learning = _learning()
+    await _router(learning=learning).propagate_event(
+        update_type="callback_query", event=_cb("sf:s1:add", **caller))
+    assert "s1" in learning.pending
+    learning.facts.remember.assert_not_called()
+
+
+async def test_suggested_fact_callback_owner():
+    learning = _learning()
+    await _router(learning=learning).propagate_event(update_type="callback_query", event=_cb("sf:s1:add"))
+    assert learning.pending == {}
+    learning.facts.remember.assert_called_once()
+
+
+@pytest.mark.parametrize("caller", REFUSED)
+async def test_forget_fact_callback_refused(caller, monkeypatch):
+    import app.bot.handlers as handlers
+    monkeypatch.setattr(handlers, "resolve_fact", lambda facts, sid: ("infra", "k"))
+    learning = _learning()
+    await _router(learning=learning).propagate_event(
+        update_type="callback_query", event=_cb("lf:s1:del", **caller))
+    learning.facts.forget.assert_not_called()
+
+
+async def test_forget_fact_callback_owner(monkeypatch):
+    import app.bot.handlers as handlers
+    monkeypatch.setattr(handlers, "resolve_fact", lambda facts, sid: ("infra", "k"))
+    learning = _learning()
+    await _router(learning=learning).propagate_event(update_type="callback_query", event=_cb("lf:s1:del"))
+    learning.facts.forget.assert_called_once_with("infra", "k")
+
+
+def _msg(*, user=1, chat_type="private", chat_id=1):
+    msg = MagicMock()
+    msg.text = "проверь диск"
+    msg.quote = None
+    msg.reply_to_message = None
+    msg.from_user.id = user
+    msg.chat.type = chat_type
+    msg.chat.id = chat_id
+    msg.answer = AsyncMock()
+    return msg
+
+
+@pytest.mark.parametrize("sender,reaches", [
+    (dict(), True),
+    (dict(user=999, chat_id=999), False),
+    (dict(chat_type="group", chat_id=-100), False),
+])
+async def test_task_message_only_from_owner_in_private_chat(sender, reaches):
+    director = MagicMock()
+    director.handle = AsyncMock(return_value=Result(task_id="t", content="ок"))
+    await _router(director=director).propagate_event(
+        update_type="message", event=_msg(**sender), bot=MagicMock())
+    assert director.handle.await_count == (1 if reaches else 0)
+
+
 async def test_report_file_removed_after_send(tmp_path):
     """Отчёт уходит в Telegram и не остаётся на диске."""
     from app.bot.handlers import build_router
