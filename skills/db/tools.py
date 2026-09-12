@@ -1,9 +1,11 @@
-"""Read-only запросы к БД в контейнерах.
+"""Запросы к БД в контейнерах через клиент (psql, mysql, sqlite3).
 
-Под инструментом лежит тот же `docker_exec`, что у скила `docker` объявлен
-DANGEROUS. Разница только в проверке: сюда пропускаем клиент БД с запросом,
-в котором нет записывающих глаголов и нет побега в shell/файлы. Всё остальное
-уходит на подтверждение через `docker_exec` скила `docker`.
+Под инструментом лежит тот же `docker_exec`, что у скила `docker`. Строковый
+фильтр ниже не доказывает read-only: он пропускал `--command=`, `\\i файл`,
+`sqlite3 -cmd` и изменяющий PRAGMA (аудит 2026-09-12, F03). Поэтому инструмент
+DANGEROUS — каждый вызов подтверждает человек, — а фильтр остался дополнительным
+отказом для явно изменяющих форм. Автоматическое чтение вернёт структурированный
+интерфейс с ограниченной ролью БД, а не очередное правило в этом фильтре.
 """
 import re
 
@@ -91,5 +93,5 @@ async def docker_query(container: str, command: list[str]) -> dict:
 
 def build_tools() -> list[Tool]:
     return [
-        Tool("docker_query", "Run a READ-ONLY database query inside a container (psql, mysql, sqlite3) passed via -c/-e. Refuses writes, DDL and shell escapes. Safe, auto-executed. For anything that modifies data use docker_exec (requires confirmation).", ExecParams, docker_query, Safety.SAFE),
+        Tool("docker_query", "Run a database query inside a container via its client (psql, mysql, sqlite3; query passed via -c/-e). Refuses obvious writes, DDL and shell escapes, but that filter is NOT a read-only guarantee, so EVERY call requires user confirmation — gather what you need in one or two queries. For data changes use docker_exec.", ExecParams, docker_query, Safety.DANGEROUS),
     ]

@@ -52,7 +52,8 @@ def test_db_and_host_skills_load():
     assert {"docker", "db", "host"} <= set(skills)
     db_tools = {t.name for t in skills["db"].tools}
     assert db_tools == {"docker_query"}
-    assert skills["db"].tools[0].safety is Safety.SAFE
+    # фильтр запросов не гарантирует read-only (аудит 2026-09-12, F03)
+    assert skills["db"].tools[0].safety is Safety.DANGEROUS
     # host не приносит готовых инструментов — он объявляет доступ к хосту,
     # из которого при спавне собирается host_query (+ shell_exec)
     assert skills["host"].tools == []
