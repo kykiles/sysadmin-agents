@@ -31,6 +31,18 @@ async def test_record_appends_jsonl(tmp_path, monkeypatch):
     assert "ts" in first
 
 
+async def test_record_has_no_setting_secret(tmp_path, monkeypatch):
+    path = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(audit.settings, "audit_trail_path", str(path))
+    monkeypatch.setattr(audit.settings, "remnawave_api_key", "AUDIT_FAKE_SECRET")
+    await audit.record(agent="a", tool="rw_curl_write",
+                       args={"body": {"nested": ["AUDIT_FAKE_SECRET"]}}, decision="approved",
+                       result={"returncode": 0, "preview": "echo AUDIT_FAKE_SECRET"})
+    text = path.read_text(encoding="utf-8")
+    assert "AUDIT_FAKE_SECRET" not in text
+    assert json.loads(text)["tool"] == "rw_curl_write"
+
+
 async def test_record_swallows_write_errors(monkeypatch):
     def boom(_event):
         raise OSError("disk full")

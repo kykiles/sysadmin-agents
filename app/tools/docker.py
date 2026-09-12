@@ -151,13 +151,17 @@ async def docker_exec(container: str, command: list[str]) -> dict:
 
 # ---------- host shell ----------
 
-async def _run_subprocess(command: list[str], timeout: float | None = None) -> dict:
+async def _run_subprocess(command: list[str], timeout: float | None = None,
+                          input: bytes | None = None) -> dict:
+    """`input` — для данных, которым не место в argv (и в поле `command` результата):
+    argv виден в списке процессов и возвращается агенту."""
     to = timeout if timeout is not None else settings.shell_timeout_seconds
     proc = await asyncio.create_subprocess_exec(
         *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.PIPE if input is not None else None,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=to)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(input), timeout=to)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
@@ -176,8 +180,8 @@ async def _run_subprocess(command: list[str], timeout: float | None = None) -> d
     }
 
 
-async def shell_exec(command: list[str]) -> dict:
-    return await _run_subprocess(command)
+async def shell_exec(command: list[str], input: bytes | None = None) -> dict:
+    return await _run_subprocess(command, input=input)
 
 
 # ---------- host access (via nsenter into pid 1 namespaces) ----------

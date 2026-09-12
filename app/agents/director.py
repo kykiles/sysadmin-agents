@@ -238,7 +238,7 @@ class Director(Agent):
                  skills_dir: Path | None = None):
         async def _make_report(title: str, markdown: str) -> dict:
             path = await asyncio.to_thread(
-                save_report, settings.reports_dir, title, markdown
+                save_report, settings.reports_dir, redact(title), redact(markdown)
             )
             self._report_path = path
             return {"saved": path, "note": "файл будет отправлен пользователю"}
@@ -438,7 +438,7 @@ class Director(Agent):
                 self._journal.record,
                 task_id=task.id,
                 chat_id=task.chat_id,
-                intent=task.content,
+                intent=redact(task.content),
                 agents=self._agents_used,
                 tool_seq=result.trace + self._sub_trace,
                 iterations=result.iterations,

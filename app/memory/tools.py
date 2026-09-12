@@ -2,6 +2,7 @@ from collections.abc import Callable
 
 from pydantic import BaseModel, Field
 
+from app.logging import redact
 from app.memory.facts import get_store
 from app.tools.base import Tool, Safety
 
@@ -47,6 +48,8 @@ def build_tools(tainted: Callable[[], bool] | None = None) -> list[Tool]:
     async def remember_fact(scope: str, key: str, value: str, description: str = "",
                             kind: str = "stable") -> dict:
         dirty = bool(tainted and tainted())
+        # память переживает задачу и уходит в каждый следующий промпт — без секретов
+        value, description = redact(value), redact(description)
         store = get_store()
         # Похожие ищем ДО записи, иначе новый факт найдёт сам себя.
         similar = store.similar(scope, key, f"{value} {description}")

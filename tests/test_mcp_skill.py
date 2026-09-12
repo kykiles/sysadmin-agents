@@ -115,6 +115,23 @@ def test_missing_env_key_is_not_sent_to_server(tmp_path, monkeypatch):
     assert called == []
 
 
+async def test_url_key_does_not_leak_through_transport_error(monkeypatch):
+    """Ошибка транспорта повторяет URL целиком — вместе с ключом из env."""
+    monkeypatch.setenv("TEST_MCP_KEY", "mcp-url-key-AUDIT-0042")
+    spec = _Spec("web_search", "искать", {"type": "object", "properties": {}})
+    monkeypatch.setattr(mcp_bridge, "_list_tools", _serves(spec))
+
+    async def _boom(url, name, args):
+        raise ConnectionError(f"cannot reach {url}")
+
+    monkeypatch.setattr(mcp_bridge, "_call_tool", _boom)
+    (tool,) = mcp_bridge.build_tools(
+        {"url": "https://example.test/mcp/?key=${TEST_MCP_KEY}"}, Safety.SAFE, "search")
+    out = await tool.execute({})
+    assert "error" in out
+    assert "mcp-url-key-AUDIT-0042" not in out
+
+
 async def test_huge_answer_is_capped(monkeypatch):
     """Страница целиком в контексте агента стоит десятков секунд на каждой генерации."""
     class _Chunk:

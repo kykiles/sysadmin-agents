@@ -4,6 +4,8 @@ from enum import Enum
 from typing import Any, Awaitable, Callable
 from pydantic import BaseModel, ValidationError
 
+from app.logging import redact, scrub
+
 
 class Safety(str, Enum):
     SAFE = "safe"
@@ -66,8 +68,10 @@ class Tool:
         except Exception as e:
             # ошибку отдаём агенту как результат вызова, а не роняем всю задачу:
             # он увидит причину и попробует другой путь
-            return json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
-        return _to_json(result)
+            return json.dumps({"error": redact(f"{type(e).__name__}: {e}")}, ensure_ascii=False)
+        # Результат уходит в контекст модели, а оттуда — в историю, отчёт и память.
+        # Секреты держат адаптеры; здесь — дополнительный слой на весь объект.
+        return _to_json(scrub(result))
 
 
 def _to_json(value: Any) -> str:

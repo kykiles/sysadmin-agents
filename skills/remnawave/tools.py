@@ -42,12 +42,22 @@ async def _run_script(script: str, args: list[str]) -> dict:
         proc.kill()
         await proc.wait()
         return {"script": script, "error": f"таймаут ({settings.remnawave_timeout}s)"}
-    return {
+    return _hide_key({
         "script": script,
         "returncode": proc.returncode,
         "stdout": out.decode(errors="replace").strip(),
         "stderr": err.decode(errors="replace").strip(),
-    }
+    })
+
+
+def _hide_key(result: dict) -> dict:
+    """Ключ панели не выходит из адаптера, даже если команда его повторила
+    (curl -v печатает отправленные заголовки)."""
+    key = settings.remnawave_api_key
+    if not key:
+        return result
+    return {k: v.replace(key, "<REMNAWAVE_API_KEY>") if isinstance(v, str) else v
+            for k, v in result.items()}
 
 
 async def rw_query(script: str, args: list[str]) -> dict:
@@ -80,16 +90,20 @@ def _panel_url(path: str) -> str:
 
 
 async def _curl(method: str, path: str, body: dict | None) -> dict:
+    # Заголовок с ключом — через конфиг curl на stdin (`-K -`), а не в argv: argv
+    # возвращается агенту полем `command` и уходил в контекст модели (аудит, F08).
+    key = settings.remnawave_api_key.replace("\\", "\\\\").replace('"', '\\"')
+    config = f'header = "Authorization: Bearer {key}"\n'
     args = [
         "curl", "-sS", "--max-time", str(settings.remnawave_timeout),
         "-X", method.upper(),
-        "-H", f"Authorization: Bearer {settings.remnawave_api_key}",
+        "-K", "-",
         "-H", "Content-Type: application/json",
         _panel_url(path),
     ]
     if body is not None:
         args += ["-d", json.dumps(body)]
-    return await shell_exec(args)
+    return _hide_key(await shell_exec(args, input=config.encode()))
 
 
 async def rw_curl_read(method: str, path: str, body: dict | None = None) -> dict:

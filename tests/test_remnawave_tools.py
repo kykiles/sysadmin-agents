@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -101,7 +102,10 @@ async def test_curl_builds_scoped_argv(monkeypatch):
     assert argv[0] == "curl"
     assert "-X" in argv and argv[argv.index("-X") + 1] == "PATCH"
     assert "https://p.example/api/users/u" in argv
-    assert any("Bearer secret" in a for a in argv)
+    # ключ — в конфиге curl на stdin, в argv его нет (argv возвращается агенту)
+    assert not any("secret" in a or "Bearer" in a for a in argv)
+    assert argv[argv.index("-K") + 1] == "-"
+    assert shell.await_args.kwargs["input"] == b'header = "Authorization: Bearer secret"\n'
     assert argv[-1] == '{"days": 30}'
 
 
@@ -116,6 +120,61 @@ async def test_curl_read_no_body(monkeypatch):
     argv = shell.await_args.args[0]
     assert "-d" not in argv
     assert argv[-1] == "https://p.example/api/nodes"
+
+
+CANARY = "AUDIT_FAKE_SECRET"
+
+
+def _canary_settings(monkeypatch):
+    monkeypatch.setattr(rt, "settings", SimpleNamespace(
+        remnawave_base_url="https://p.example", remnawave_api_key=CANARY, remnawave_timeout=1))
+
+
+async def test_curl_result_has_no_key_even_if_echoed(monkeypatch):
+    """Аудит F08: ключ был в поле `command`; curl -v ещё и печатает заголовки."""
+    _canary_settings(monkeypatch)
+
+    async def echoing_shell(argv, input=None):
+        return {"command": argv, "returncode": 0,
+                "stdout": json.dumps({"nodes": [{"auth": CANARY}]}),
+                "stderr": input.decode()}
+
+    monkeypatch.setattr(rt, "shell_exec", echoing_shell)
+    out = await rt.rw_curl_read("GET", "/api/nodes")
+    assert CANARY not in json.dumps(out)
+    assert out["returncode"] == 0 and "nodes" in out["stdout"]
+
+
+async def test_curl_tool_result_has_no_key(monkeypatch):
+    """Целиком через Tool.execute — то, что уходит в messages модели."""
+    _canary_settings(monkeypatch)
+
+    async def shell(argv, input=None):
+        return {"command": argv, "returncode": 0, "stdout": "{}", "stderr": ""}
+
+    monkeypatch.setattr(rt, "shell_exec", shell)
+    tool = next(t for t in rt.build_tools() if t.name == "rw_curl_read")
+    out = await tool.execute({"method": "GET", "path": "/api/nodes"})
+    assert CANARY not in out
+    assert json.loads(out)["returncode"] == 0
+
+
+async def test_run_script_output_has_no_key(monkeypatch):
+    _canary_settings(monkeypatch)
+
+    class FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return (f'{{"echo":"{CANARY}"}}'.encode(), f"auth {CANARY}".encode())
+
+    async def fake_exec(*argv, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(rt.asyncio, "create_subprocess_exec", fake_exec)
+    out = await rt._run_script("nodes", [])
+    assert CANARY not in json.dumps(out)
+    assert out["returncode"] == 0
 
 
 def test_build_tools_safety():

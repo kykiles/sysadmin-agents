@@ -16,11 +16,48 @@ _ASSIGN = re.compile(
 )
 _URL_CRED = re.compile(r"(://[^\s:/@\"']+:)([^\s@\"'\\]+)(?=@)")
 
+# Регулярки выше узнают только знакомые формы (JWT, Bearer, password=). Ключ из
+# настроек узнаём по значению — в какой бы форме его ни повторила внешняя команда.
+_SECRET_SETTINGS = ("llm_api_key", "telegram_bot_token", "remnawave_api_key")
+# Короткие значения похожи на обычные слова: их замена портила бы любой вывод.
+_MIN_SECRET = 8
+_registered: set[str] = set()
+
+
+def register_secret(value: str) -> None:
+    """Запомнить credential, которого нет в настройках (ключ из env в URL MCP)."""
+    if len(value) >= _MIN_SECRET:
+        _registered.add(value)
+
+
+def _known_secrets() -> list[str]:
+    values = {getattr(settings, name) or "" for name in _SECRET_SETTINGS} | _registered
+    # длинные первыми: ключ, содержащий другой ключ, не должен остаться хвостом
+    return sorted((v for v in values if len(v) >= _MIN_SECRET), key=len, reverse=True)
+
 
 def redact(text: str) -> str:
+    for secret in _known_secrets():
+        text = text.replace(secret, "<redacted>")
     text = _SECRET.sub("<redacted>", text)
     text = _ASSIGN.sub(r"\1<redacted>", text)
     return _URL_CRED.sub(r"\1<redacted>", text)
+
+
+def scrub(value):
+    """redact по всем строкам вложенных dict/list — объект целиком, а не превью."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {k: scrub(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [scrub(v) for v in value]
+    return value
+
+
+def scrub_event(_logger, _method, event_dict: dict) -> dict:
+    """Процессор structlog: ни одно поле лога не уходит с секретом."""
+    return scrub(event_dict)
 
 
 def setup_logging() -> None:
@@ -43,6 +80,7 @@ def setup_logging() -> None:
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            scrub_event,
             structlog.dev.ConsoleRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),

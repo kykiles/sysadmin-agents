@@ -123,12 +123,12 @@ class Agent:
             iterations += 1
             msg = await self._llm.chat(messages, [t.schema() for t in self.tools])
             if not msg.tool_calls:
-                content = "\n\n".join([*said, msg.content or ""]).strip()
+                content = redact("\n\n".join([*said, msg.content or ""]).strip())
                 if self._memory:
-                    await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
+                    await asyncio.to_thread(self._memory.append, task.chat_id, "user", redact(task.content))
                     await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
                 return Result(task_id=task.id, content=content,
-                              final=(msg.content or "").strip(),
+                              final=redact((msg.content or "").strip()),
                               trace=trace, iterations=iterations,
                               transcript=[*messages, {"role": "assistant", "content": content}])
             if msg.content:
@@ -180,9 +180,9 @@ class Agent:
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
         limit = settings.agent_max_iterations
         note = f"достигнут лимит итераций ({limit}), ответ может быть неполным"
-        content = "\n\n".join([*said, note])
+        content = redact("\n\n".join([*said, note]))
         if self._memory:
-            await asyncio.to_thread(self._memory.append, task.chat_id, "user", task.content)
+            await asyncio.to_thread(self._memory.append, task.chat_id, "user", redact(task.content))
             await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
         return Result(task_id=task.id, content=content, success=False,
                       final=note, trace=trace, iterations=iterations,

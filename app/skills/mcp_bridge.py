@@ -12,12 +12,13 @@ ponytail: одно лишнее рукопожатие на вызов; долг
 """
 import asyncio
 import os
+import re
 import threading
 from contextlib import asynccontextmanager
 
 from pydantic import BaseModel, ConfigDict
 
-from app.logging import get_logger
+from app.logging import get_logger, register_secret
 from app.tools.base import Safety, Tool
 
 log = get_logger("mcp")
@@ -90,10 +91,19 @@ async def _call_tool(url: str, name: str, args: dict) -> str:
     return out
 
 
+_ENV_REF = re.compile(r"\$\{?(\w+)\}?")
+
+
 def _resolve(config: dict) -> str | None:
     """Подставить переменные окружения. Ключи API живут в .env, не в SKILL.md."""
     url = os.path.expandvars(config["url"])
-    return None if "$" in url else url
+    if "$" in url:
+        return None
+    # Подставленное значение — ключ в URL: ошибка транспорта повторяет URL целиком,
+    # и без регистрации ключ ушёл бы в результат инструмента и в лог.
+    for name in _ENV_REF.findall(config["url"]):
+        register_secret(os.environ.get(name, ""))
+    return url
 
 
 def build_tools(config: dict, safety: Safety, skill_name: str) -> list[Tool]:
