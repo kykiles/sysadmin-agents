@@ -92,7 +92,8 @@ class Agent:
         try:
             prepared = tool.prepare(raw)
         except ValidationError as e:
-            return json.dumps({"error": e.errors(include_url=False)})
+            return json.dumps({"error": e.errors(include_url=False, include_context=False)},
+                              ensure_ascii=False)
         req = ConfirmationRequest(
             run_id=task.run_id or task.id,
             agent_id=self.agent_id,

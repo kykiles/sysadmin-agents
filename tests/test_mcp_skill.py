@@ -161,7 +161,7 @@ def test_unexpected_spec_shape_does_not_crash_startup(monkeypatch):
 def test_server_schema_reaches_the_model(monkeypatch):
     """Схему параметров задаёт сервер — не наша модель."""
     schema = {"type": "object", "properties": {"query": {"type": "string"}},
-              "required": ["query"]}
+              "required": ["query"], "additionalProperties": False}
     monkeypatch.setattr(
         mcp_bridge, "_list_tools", _serves(_Spec("web_search", "искать", schema)),
     )
@@ -178,6 +178,121 @@ def test_dangerous_mcp_tool_still_gets_intent_field(monkeypatch):
     params = tools[0].schema()["function"]["parameters"]
     assert "_intent" in params["properties"]
     assert "_intent" in params["required"]
+
+
+# ---------- идентичность вызова и проверка схемы (аудит 2026-09-12, F07) ----------
+
+URL = "https://mcp.example/mcp/?key=k-0042-secret"
+CLOSED = {"type": "object",
+          "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+          "required": ["query"], "additionalProperties": False}
+EMPTY_CLOSED = {"type": "object", "properties": {}, "additionalProperties": False}
+
+
+def _built(monkeypatch, *specs, safety=Safety.SAFE):
+    calls = []
+
+    async def _call(url, name, args):
+        calls.append((name, dict(args)))
+        return "ok"
+
+    monkeypatch.setattr(mcp_bridge, "_list_tools", _serves(*specs))
+    monkeypatch.setattr(mcp_bridge, "_call_tool", _call)
+    return mcp_bridge.build_tools({"url": URL}, safety, "search"), calls
+
+
+async def test_name_argument_does_not_redirect_dispatch(monkeypatch):
+    (tool,), calls = _built(monkeypatch, _Spec("read_status", "read", EMPTY_CLOSED))
+    out = await tool.execute({"_name": "different_remote_operation"})
+    assert "error" in out
+    assert calls == []
+
+
+async def test_declared_name_field_is_an_ordinary_argument(monkeypatch):
+    schema = {"type": "object", "properties": {"_name": {"type": "string"}},
+              "additionalProperties": False}
+    (tool,), calls = _built(monkeypatch, _Spec("read_status", "read", schema))
+    await tool.execute({"_name": "different_remote_operation"})
+    assert calls == [("read_status", {"_name": "different_remote_operation"})]
+
+
+@pytest.mark.parametrize("args", [
+    {"query": 1},                     # неверный тип
+    {},                               # нет обязательного
+    {"query": "x", "extra": 1},       # лишнее поле при закрытой схеме
+    {"query": "x", "limit": "5"},     # строка вместо integer
+])
+async def test_invalid_args_make_no_remote_call(monkeypatch, args):
+    (tool,), calls = _built(monkeypatch, _Spec("web_search", "s", CLOSED))
+    out = await tool.execute(args)
+    assert "error" in out
+    assert calls == []
+
+
+async def test_invalid_args_of_dangerous_tool_are_not_even_confirmed(monkeypatch, tmp_path):
+    from app import audit
+    from app.agents.base import Agent
+    from app.agents.messages import Decision
+
+    monkeypatch.setattr(audit.settings, "audit_trail_path", str(tmp_path / "audit.jsonl"))
+    (tool,), calls = _built(monkeypatch, _Spec("delete_page", "d", CLOSED), safety=Safety.DANGEROUS)
+    asked = []
+
+    class Yes:
+        async def request(self, req):
+            asked.append(req)
+            return Decision.APPROVED
+
+    call = ChoiceMessage(content=None, tool_calls=[ToolCall(
+        id="c1", function=ToolCallFunction(name="delete_page", arguments=json.dumps({"query": 1})))])
+    llm = FakeLLM([call, ChoiceMessage(content="ок", tool_calls=None)])
+    await Agent("a", "sys", [tool], llm, gateway=Yes()).handle(Task(content="x"))
+    assert asked == [] and calls == []
+
+
+async def test_each_tool_dispatches_its_own_remote_name(monkeypatch):
+    tools, calls = _built(monkeypatch, _Spec("alpha", "a", EMPTY_CLOSED), _Spec("beta", "b", EMPTY_CLOSED))
+    for tool in tools:
+        await tool.execute({})
+    assert [name for name, _ in calls] == ["alpha", "beta"]
+
+
+def test_server_identity_is_separate_and_has_no_key(monkeypatch):
+    (tool,), _ = _built(monkeypatch, _Spec("web_search", "s", CLOSED))
+    assert tool.remote == ("search:mcp.example", "web_search")
+    assert "k-0042-secret" not in repr(tool.remote)
+
+
+@pytest.mark.parametrize("schema", [
+    {"type": "object", "properties": {"q": {"type": "string"}}},              # нет additionalProperties
+    {"type": "object", "properties": {"q": {}}, "additionalProperties": False},  # поле без типа
+    {"type": "object", "additionalProperties": False,
+     "properties": {"opts": {"type": "object", "properties": {}}}},           # вложенный открытый объект
+    {"type": "object", "additionalProperties": False,
+     "properties": {"q": {"anyOf": [{"type": "string"}, {"type": "object"}]}}},  # не разобрать
+    {"type": "object", "additionalProperties": False,
+     "properties": {"tags": {"type": "array"}}},                               # массив без items
+])
+def test_open_or_unsupported_schema_is_not_safe(monkeypatch, schema):
+    (tool,), _ = _built(monkeypatch, _Spec("web_search", "s", schema))
+    assert tool.safety is Safety.DANGEROUS
+
+
+def test_closed_schema_stays_safe(monkeypatch):
+    nested = {"type": "object", "additionalProperties": False, "required": ["q"], "properties": {
+        "q": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "opts": {"type": "object", "additionalProperties": False,
+                 "properties": {"deep": {"type": "boolean"}}},
+    }}
+    (tool,), _ = _built(monkeypatch, _Spec("web_search", "s", nested))
+    assert tool.safety is Safety.SAFE
+
+
+def test_invalid_schema_skips_only_that_tool(monkeypatch):
+    tools, _ = _built(monkeypatch, _Spec("broken", "b", {"type": "objekt"}),
+                      _Spec("fine", "f", EMPTY_CLOSED))
+    assert [t.name for t in tools] == ["fine"]
 
 
 # ---------- изоляция недоверенного вывода ----------

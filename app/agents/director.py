@@ -174,6 +174,14 @@ def _budgeted(tools: list[Tool], limit: int) -> list[Tool]:
     return [wrap(t) for t in tools]
 
 
+def _identity(tool: Tool) -> tuple:
+    """Что считается одним инструментом: тот же удалённый метод того же сервера
+    или тот же код с той же моделью параметров и тем же уровнем риска."""
+    if tool.remote is not None:
+        return (tool.remote, tool.safety)
+    return (tool.fn, tool.params_model, tool.safety)
+
+
 def _memory_index() -> str:
     """Оглавление памяти в промпт — области, ключи и «когда пригодится»; сами
     значения по запросу.
@@ -272,18 +280,22 @@ class Director(Agent):
                     "how": "сделай два spawn: первый соберёт данные, второму передай их выводы в task",
                 }
             # Навыки пересекаются по инструментам (docker+observe → docker_ps и др.),
-            # а шлюз на дубль имени в tools отвечает 400. Первый выигрывает.
-            uniq = {
-                t.name: t
-                for s in chosen
-                for t in (_budgeted(s.tools, _UNTRUSTED_CALL_BUDGET) if s.untrusted else s.tools)
-            }
-            for s_ in chosen:
-                if s_.access_tools:
-                    for t in s_.access_tools(access):
-                        uniq.setdefault(t.name, t)
-            for t in build_host_tools(access):
-                uniq.setdefault(t.name, t)
+            # а шлюз на дубль имени в tools отвечает 400. Один и тот же инструмент
+            # сводим в один; разные реализации под одним именем — отказ: выбор
+            # «последний в dict» молча подменял бы вызываемый код (аудит F07).
+            uniq: dict[str, Tool] = {}
+            candidates = [
+                *(t for s in chosen
+                  for t in (_budgeted(s.tools, _UNTRUSTED_CALL_BUDGET) if s.untrusted else s.tools)),
+                *(t for s in chosen if s.access_tools for t in s.access_tools(access)),
+                *build_host_tools(access),
+            ]
+            for t in candidates:
+                if _identity(uniq.setdefault(t.name, t)) != _identity(t):
+                    return {"error": (
+                        f"инструмент {t.name} в выданных навыках реализован по-разному — "
+                        "выдай эти навыки разным агентам"
+                    )}
             sub = Agent(
                 name=f"spawned:{'+'.join(skills)}",
                 system_prompt=compose_prompt(role, chosen),

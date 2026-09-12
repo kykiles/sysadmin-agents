@@ -37,6 +37,9 @@ class Tool:
     # Готовая JSON-схема параметров вместо выведенной из params_model. Нужна
     # инструментам, схему которых задаём не мы, — они приходят от MCP-сервера.
     params_schema: dict | None = None
+    # Что на самом деле вызывается у MCP: (server_id, имя метода на сервере).
+    # Отдельно от name — отображаемое имя может совпасть у двух серверов.
+    remote: tuple[str, str] | None = None
 
     def schema(self) -> dict:
         parameters = self.params_schema or self.params_model.model_json_schema()
@@ -86,7 +89,8 @@ class Tool:
         try:
             prepared = self.prepare(raw_args)
         except ValidationError as e:
-            return json.dumps({"error": e.errors(include_url=False)})
+            return json.dumps({"error": e.errors(include_url=False, include_context=False)},
+                              ensure_ascii=False)
         return await self.invoke(prepared)
 
 

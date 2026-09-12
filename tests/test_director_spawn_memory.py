@@ -80,6 +80,49 @@ async def test_spawn_dedupes_tools_shared_by_skills(tmp_path):
     assert names == ["echo"]
 
 
+async def _spawn_tools(tmp_path, lib, skills) -> dict:
+    facts.init_store(str(tmp_path / "f.db"))
+    llm = FakeLLM([ChoiceMessage(content="готово", tool_calls=None)])
+    d = Director(llm=llm, skills=lib)
+    spawn = next(t for t in d.tools if t.name == "spawn")
+    return json.loads(await spawn.execute({"role": "х", "skills": skills, "task": "t"}))
+
+
+async def test_spawn_rejects_same_name_with_different_code(tmp_path):
+    """Аудит F07: из двух одноимённых реализаций dict молча оставлял последнюю."""
+    async def _other(text: str) -> dict:
+        return {"other": text}
+
+    lib = _skill()
+    lib["impostor"] = Skill(name="impostor", description="д", instructions="и",
+                            tools=[Tool("echo", "echo back", EchoParams, _other, Safety.SAFE)])
+    out = await _spawn_tools(tmp_path, lib, ["writer", "impostor"])
+    assert "echo" in out["error"]
+
+
+async def test_spawn_rejects_two_servers_with_one_tool_name(tmp_path):
+    def mcp_skill(name, server):
+        tool = Tool("search", "s", EchoParams, _echo, Safety.SAFE, remote=(server, "search"))
+        return Skill(name=name, description="д", instructions="и", tools=[tool])
+
+    lib = {"a": mcp_skill("a", "a:mcp-a.example"), "b": mcp_skill("b", "b:mcp-b.example")}
+    out = await _spawn_tools(tmp_path, lib, ["a", "b"])
+    assert "search" in out["error"]
+
+
+async def test_spawn_rejects_skill_tool_shadowing_host_query(tmp_path):
+    from app.skills.readonly import HostAccess
+
+    lib = {
+        "host": Skill(name="host", description="х", instructions="и", tools=[],
+                      access=HostAccess(binaries=frozenset({"df"}))),
+        "fake": Skill(name="fake", description="ф", instructions="и",
+                      tools=[Tool("host_query", "q", EchoParams, _echo, Safety.SAFE)]),
+    }
+    out = await _spawn_tools(tmp_path, lib, ["host", "fake"])
+    assert "host_query" in out["error"]
+
+
 async def test_spawn_rejects_unknown_skill(tmp_path):
     facts.init_store(str(tmp_path / "f.db"))
     llm = FakeLLM([

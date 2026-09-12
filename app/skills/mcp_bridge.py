@@ -15,8 +15,11 @@ import os
 import re
 import threading
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict
+from jsonschema.exceptions import SchemaError, best_match
+from jsonschema.validators import validator_for
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.logging import get_logger, register_secret
 from app.tools.base import Safety, Tool
@@ -30,9 +33,87 @@ MAX_RESULT_CHARS = 6000
 
 
 class AnyParams(BaseModel):
-    """Аргументы описывает сервер своей JSON-схемой — нашей модели их проверять нечем."""
+    """Аргументы описывает сервер своей JSON-схемой — поля берём как есть, а
+    проверяет их модель из `_params_model`."""
 
     model_config = ConfigDict(extra="allow")
+
+
+def _params_model(schema: dict) -> type[BaseModel]:
+    """Модель параметров, проверяющая аргументы объявленной сервером JSON Schema —
+    настоящим валидатором, до подтверждения и вызова. Раньше схема шла только в
+    описание для модели, а лишние поля доходили до сервера (аудит 2026-09-12, F07)."""
+    validator = validator_for(schema)(schema)
+
+    class Params(AnyParams):
+        @model_validator(mode="before")
+        @classmethod
+        def _check(cls, data):
+            error = best_match(validator.iter_errors(data))
+            if error is not None:
+                where = "/".join(str(p) for p in error.absolute_path) or "аргументы"
+                raise ValueError(f"{where}: {error.message}")
+            return data
+
+    return Params
+
+
+# Конструкции, замкнутость которых здесь не проверить: такая схема считается открытой.
+_UNSUPPORTED = frozenset({
+    "$ref", "$defs", "definitions", "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
+    "patternProperties", "dependentSchemas", "unevaluatedProperties", "additionalItems",
+    "prefixItems", "contains",
+})
+
+
+def _closed(schema) -> bool:
+    """Закрыт ли контракт: у каждого значения задан тип, у каждого объекта
+    `additionalProperties: false`, у массива — закрытые items. Открытую схему
+    SAFE не объявляем: непроверенные поля ушли бы на сервер без подтверждения."""
+    if not isinstance(schema, dict) or _UNSUPPORTED & schema.keys():
+        return False
+    if not {"type", "enum", "const"} & schema.keys():
+        return False
+    types = schema.get("type")
+    types = set(types) if isinstance(types, list) else {types}
+    if "object" in types:
+        if schema.get("additionalProperties") is not False:
+            return False
+        if not all(_closed(s) for s in schema.get("properties", {}).values()):
+            return False
+    if "array" in types and not _closed(schema.get("items")):
+        return False
+    return True
+
+
+def _remote_tool(url: str, server_id: str, spec, safety: Safety, skill_name: str) -> Tool | None:
+    """Инструмент одного метода сервера. Имя метода захвачено замыканием вне
+    аргументов вызова: `fn(_name=spec.name, **kwargs)` позволял аргументом `_name`
+    вызвать на сервере другой метод, чем объявлен, показан и записан в журнал."""
+    schema = spec.input_schema
+    try:
+        validator_for(schema).check_schema(schema)
+    except SchemaError as e:
+        log.warning("mcp_schema_invalid", skill=skill_name, tool=spec.name, error=e.message)
+        return None
+    if safety is Safety.SAFE and not _closed(schema):
+        log.warning("mcp_schema_open", skill=skill_name, tool=spec.name,
+                    note="схема не закрыта — вызов только с подтверждением")
+        safety = Safety.DANGEROUS
+    remote = spec.name
+
+    async def fn(**kwargs) -> str:
+        return await asyncio.wait_for(_call_tool(url, remote, kwargs), TIMEOUT)
+
+    return Tool(
+        name=spec.name,
+        description=spec.description or spec.name,
+        params_model=_params_model(schema),
+        fn=fn,
+        safety=safety,
+        params_schema=schema,
+        remote=(server_id, remote),
+    )
 
 
 def _run(coro):
@@ -115,21 +196,12 @@ def build_tools(config: dict, safety: Safety, skill_name: str) -> list[Tool]:
         return []
     # Под защитой и сборка, а не только запрос: сервер чужой, и сюрприз в его
     # ответе не должен ронять запуск бота — навык просто останется без инструментов.
+    # Идентичность сервера — навык и хост, без пути и query: там бывает ключ.
+    server_id = f"{skill_name}:{urlsplit(url).hostname}"
     try:
         specs = _run(asyncio.wait_for(_list_tools(url), TIMEOUT))
-        tools = []
-        for spec in specs:
-            async def fn(_name: str = spec.name, **kwargs) -> str:
-                return await asyncio.wait_for(_call_tool(url, _name, kwargs), TIMEOUT)
-
-            tools.append(Tool(
-                name=spec.name,
-                description=spec.description or spec.name,
-                params_model=AnyParams,
-                fn=fn,
-                safety=safety,
-                params_schema=spec.input_schema,
-            ))
+        tools = [t for spec in specs
+                 if (t := _remote_tool(url, server_id, spec, safety, skill_name)) is not None]
     except Exception as e:
         log.warning("mcp_unavailable", skill=skill_name, error=f"{type(e).__name__}: {e}")
         return []
