@@ -16,9 +16,8 @@ description: сертификаты TLS — обнаружение механи�
   `/etc/ssl` с их сроками. Начинай с него для любого «проверь сертификаты». Безопасен, сразу.
 - `host_query` — **только чтение** на хосте (openssl, ls/stat/cat/find/readlink,
   crontab -l, systemctl list-timers/status, certbot certificates); для точечных
-  доуточнений после `tls_report`. Можно обернуть в `sh -c '<pipeline>'` ради
-  пайпов/grep/циклов — тоже без подтверждения, если все команды внутри read-only.
-  Безопасен, сразу.
+  доуточнений после `tls_report`. Одна команда argv на вызов: `sh -c`, пайпы,
+  редиректы и glob (`*`) не выполняются. Безопасен, сразу.
 - `tls_check` — срок и данные сертификата эндпоинта `host:port` (что реально отдаётся
   наружу).
 - `shell_exec` — **изменяющая** команда (продление, reload nginx). Опасна, система
@@ -42,7 +41,7 @@ description: сертификаты TLS — обнаружение механи�
 2. certbot: `certbot certificates` — какие серты им управляются и когда истекают.
 3. Крон: `crontab -l`; `ls -la /etc/cron.d`.
 4. Файлы на диске: `ls -la /etc/letsencrypt/live` и `/etc/letsencrypt/renewal`;
-   `find /root/.acme.sh -maxdepth 2 -name '*.cer' 2>/dev/null` для acme.sh.
+   `find /root/.acme.sh -maxdepth 2 -name '*.cer'` для acme.sh.
 5. Если серты монтируются в контейнер (например remnawave-nginx) — найди путь на хосте
    (`ls -la` смонтированного каталога) и работай с ним.
 Итог обнаружения (пути, топология) верни директору в отчёте — устойчивые факты он сохранит в память сам.

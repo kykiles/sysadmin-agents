@@ -64,8 +64,9 @@ def build_access_tools(access: HostAccess) -> list[Tool]:
         return await ssh_query(host, command, binaries)
 
     return [
-        Tool("ssh_query", "Run a READ-ONLY command on a REMOTE node over SSH. Allowed binaries: "
-             f"{', '.join(sorted(binaries))}. May be wrapped in `sh -c '<pipeline>'`. Safe, auto-executed.",
+        Tool("ssh_query", "Run ONE READ-ONLY command argv on a REMOTE node over SSH. Allowed binaries: "
+             f"{', '.join(sorted(binaries))}. No shell: `sh -c`, pipes and redirects are refused — "
+             "make several calls instead. Safe, auto-executed.",
              SshParams, query, Safety.SAFE),
         Tool("ssh_exec", "Run any command on a REMOTE node over SSH (DESTRUCTIVE: restarts, updates, compose). Requires user confirmation.", SshParams, ssh_exec, Safety.DANGEROUS),
     ]

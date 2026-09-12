@@ -12,8 +12,8 @@ description: диагностика — журналы, метрики хост�
 Инструменты:
 - `host_query` — read-only команда на **хосте** (journalctl, ss, free, vmstat, iostat,
   df, du, ps, top, dmesg, ip show, systemctl status, чтение логов через tail/cat/grep).
-  Можно обернуть в `sh -c '<pipeline>'` ради пайпов и циклов — тоже без подтверждения,
-  если все команды внутри read-only.
+  Одна команда argv на вызов: `sh -c`, пайпы, редиректы и glob (`*`) не выполняются —
+  независимые проверки делай отдельными вызовами в одном ходе.
 - `docker_ps` / `docker_logs` / `docker_stats` — состояние, логи и метрики контейнеров.
 
 ### Общие правила
@@ -25,12 +25,12 @@ description: диагностика — журналы, метрики хост�
 ### Плейбук: «почему тормозит»
 1. Общая нагрузка: `uptime`, `free -m`, `vmstat 1 3`, `df -h`.
 2. Кто ест ресурсы: `ps aux --sort=-%cpu` (топ по CPU), `ps aux --sort=-%mem` (по памяти).
-3. Диск/IO: `iostat -x 1 3` (если доступен), `du -sh /var/log/* /opt/*`.
+3. Диск/IO: `iostat -x 1 3` (если доступен), `du -h -d 1 /var/log`, `du -h -d 1 /opt`.
 4. Контейнеры: `docker_ps`, затем `docker_stats <container>` по подозрительным.
 
 ### Плейбук: «почему упало / сервис недоступен»
 1. Статус юнита: `systemctl status <unit>`; последние логи: `journalctl -u <unit> -n 200 --no-pager`.
-2. Ошибки ядра/OOM: `dmesg -T | tail -n 50`, ищи `Out of memory` / `oom-kill`.
+2. Ошибки ядра/OOM: `dmesg -T --level=err,warn`, ищи `Out of memory` / `oom-kill`.
 3. Порты/слушатели: `ss -tlnp`.
 4. Контейнер: `docker_ps` (State/ExitCode), `docker_logs <container> tail=200`.
 5. Веб: `tail -n 100 /var/log/nginx/error.log`.

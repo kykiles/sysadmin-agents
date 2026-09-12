@@ -15,7 +15,6 @@ tls, security и ssh, — и копии разошлись: список read-on
 from dataclasses import dataclass, field
 from typing import Callable
 
-from app.skills.shellsafe import check_wrapped_readonly
 from app.tools.base import Tool, Safety
 from app.tools.docker import ShellParams, host_exec
 
@@ -141,16 +140,11 @@ KNOWN_BINARIES = _ALWAYS_SAFE | frozenset(_CHECKS)
 def is_read_only(command: list[str], binaries: frozenset[str]) -> bool:
     """Читает ли команда, не меняя состояния, в пределах разрешённых бинарников.
 
-    `sh -c '<pipeline>'` разбирается на простые команды: читающим считается
-    только пайплайн, где каждая команда проходит ту же проверку.
+    Принимается только один argv разрешённой утилиты. Оболочки (`sh -c`, `bash -c`)
+    в автоматический путь не попадают ни с какими аргументами: разбор shell-программы
+    строковым парсером обходился переводом строки и редиректами (аудит 2026-09-12, F01).
+    Скрипт с пайпами — только через инструмент с подтверждением.
     """
-    wrapped = check_wrapped_readonly(command, lambda c: _simple(c, binaries))
-    if wrapped is not None:
-        return wrapped
-    return _simple(command, binaries)
-
-
-def _simple(command: list[str], binaries: frozenset[str]) -> bool:
     if not command:
         return False
     binary, args = command[0], command[1:]
@@ -167,6 +161,8 @@ def refusal(command: list[str], binaries: frozenset[str], exec_tool: str = "shel
         "command": command,
         "error": "команда не входит в список read-only для этого агента "
                  f"(доступны: {', '.join(sorted(binaries))}). "
+                 "Принимается одна команда argv без sh -c, пайпов и редиректов — "
+                 "независимые проверки делай отдельными вызовами. "
                  f"Для изменяющих операций используй {exec_tool} (с подтверждением).",
     }
 
@@ -186,9 +182,9 @@ def build_host_tools(access: HostAccess) -> list[Tool]:
         allowed = ", ".join(sorted(access.binaries))
         tools.append(Tool(
             "host_query",
-            "Run a READ-ONLY command on the HOST via nsenter. Allowed binaries: "
-            f"{allowed}. May be wrapped in `sh -c '<pipeline>'` for pipes/grep/loops — "
-            "still auto-executed if every command inside is read-only. "
+            "Run ONE READ-ONLY command argv on the HOST via nsenter. Allowed binaries: "
+            f"{allowed}. No shell: `sh -c`, pipes, redirects and globs are refused — "
+            "make several calls instead (they run in parallel). "
             "Safe, auto-executed. For anything that changes state use shell_exec.",
             ShellParams, host_query, Safety.SAFE,
         ))

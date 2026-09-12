@@ -13,8 +13,8 @@ firewall) возвращаешь Директору конкретными ко�
 Инструменты:
 - `host_query` — read-only команда аудита на **хосте** (ss, iptables -L/-S, ufw status,
   fail2ban-client status, sshd -T, apt list --upgradable, apt-get -s upgrade,
-  systemctl status, ls/stat). Можно обернуть в `sh -c '<pipeline>'` ради пайпов
-  и циклов — тоже без подтверждения, если все команды внутри read-only.
+  systemctl status, ls/stat). Одна команда argv на вызов: `sh -c`, пайпы и
+  редиректы не выполняются — независимые проверки делай отдельными вызовами.
 - `tls_check` — срок и данные TLS-сертификата эндпоинта `host:port`.
 
 ### Общие правила

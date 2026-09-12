@@ -95,32 +95,73 @@ def test_unknown_binary_blocked():
     assert not ro()
 
 
-# ---------- обёртка sh -c ----------
+# ---------- оболочки не бывают read-only (аудит 2026-09-12, F01) ----------
 
-def test_sh_wrapper_readonly_allowed():
-    assert ro("sh", "-c", "df -h | grep -i /")
-    assert ro("bash", "-c", "ss -tlnp && free -m")
+# Три воспроизведения из аудита: newline, `uniq in out`, `>&` в файл.
+F01_CASES = [
+    ["sh", "-c", "echo inspection\ntouch /tmp/f01-newline"],
+    ["sh", "-c", "printf audit | uniq - /tmp/f01-uniq"],
+    ["bash", "-c", "printf audit >& /tmp/f01-redirect"],
+]
+
+SHELL_CASES = F01_CASES + [
+    ["sh", "-c", "df -h"],
+    ["bash", "-c", "ss -tlnp && free -m"],
+    ["bash", "-lc", "uptime"],
+    ["sh", "-e", "-c", "df -h"],
+    ["bash", "--norc", "-c", "df"],
+    ["dash", "-c", "df"],
+    ["sh", "/tmp/script.sh"],
+    ["sh"],
+    ["uniq", "/etc/passwd", "/tmp/out"],
+    ["/bin/sh", "-c", "df"],
+]
 
 
-def test_sh_wrapper_mutating_blocked():
-    assert not ro("sh", "-c", "df -h && systemctl restart docker")
-    assert not ro("bash", "-c", "rm -rf /tmp/x")
-    assert not ro("sh", "-c", "certbot renew && systemctl reload nginx")
+@pytest.mark.parametrize("command", SHELL_CASES)
+def test_shell_never_readonly(command):
+    assert not ro(*command)
 
 
-def test_sh_wrapper_cert_discovery_allowed():
-    # реальный паттерн из лога: echo + ls + for-цикл с openssl, всё read-only
-    assert ro(
-        "sh", "-c",
-        'echo "---LIVE---" && ls -la /etc/letsencrypt/live/ 2>/dev/null && '
-        'for dir in /etc/letsencrypt/live/*/; do echo "=== $dir ===" && '
-        'openssl x509 -in "${dir}cert.pem" -noout -subject -dates 2>/dev/null; done',
-    )
-    assert ro("sh", "-c", "certbot certificates 2>&1 | grep -i domain")
+def test_shell_refused_even_if_listed_in_binaries():
+    """Оболочка в скоупе скила не делает её читающей: проверки аргументов у неё нет."""
+    assert not is_read_only(["sh", "-c", "df"], frozenset({"sh", "bash", "df"}))
+    assert not is_read_only(["bash", "-c", "df"], frozenset({"sh", "bash", "df"}))
 
 
-def test_sh_wrapper_write_redirection_blocked():
-    assert not ro("sh", "-c", "openssl x509 -in a.pem > /etc/out.txt")
+@pytest.mark.parametrize("command", SHELL_CASES + [
+    ["certbot", "certificates"],  # вне HostAccess скила host
+    ["rm", "-rf", "/tmp/x"],
+])
+async def test_host_query_refuses_before_executor(monkeypatch, command):
+    import app.skills.readonly as ro_mod
+
+    calls = []
+
+    async def fake_host_exec(cmd):
+        calls.append(cmd)
+        return {"command": cmd, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(ro_mod, "host_exec", fake_host_exec)
+    query = build_host_tools(HOST)[0]
+    out = await query.fn(command=command)
+    assert "error" in out
+    assert calls == []
+
+
+async def test_host_query_runs_direct_df(monkeypatch):
+    import app.skills.readonly as ro_mod
+
+    calls = []
+
+    async def fake_host_exec(cmd):
+        calls.append(cmd)
+        return {"command": cmd, "returncode": 0, "stdout": "ok", "stderr": ""}
+
+    monkeypatch.setattr(ro_mod, "host_exec", fake_host_exec)
+    out = await build_host_tools(HOST)[0].fn(command=["df", "-h"])
+    assert out["returncode"] == 0
+    assert calls == [["df", "-h"]]
 
 
 # ---------- скоуп: скил ограничивает набор бинарников ----------
@@ -137,15 +178,11 @@ def test_scope_limits_binaries(access, allowed, denied):
 
 
 @pytest.mark.parametrize("access", [HOST, OBSERVE])
-def test_nproc_and_echo_pipeline(access):
-    # агент собирает сводку одним sh -c 'echo ...; uptime; nproc' — не должно упираться в скоуп
+def test_nproc_and_uptime_direct(access):
+    # сводка собирается отдельными вызовами, а не одним sh -c
     assert is_read_only(["nproc"], access.binaries)
-    assert is_read_only(["sh", "-c", "echo '=== load ==='; uptime; nproc"], access.binaries)
-
-
-def test_scope_applies_inside_sh_wrapper():
-    # обёртка не обходит скоуп: certbot недоступен агенту со скилом host
-    assert not is_read_only(["sh", "-c", "certbot certificates"], HOST.binaries)
+    assert is_read_only(["uptime"], access.binaries)
+    assert not is_read_only(["sh", "-c", "echo '=== load ==='; uptime; nproc"], access.binaries)
 
 
 def test_union_of_scopes_sees_both():
@@ -197,7 +234,8 @@ async def test_host_query_rejects_and_runs(monkeypatch):
 
 
 def test_docker_skill_allows_reading_logs_via_host():
-    """Агрегация логов (docker logs | grep -c) уходила в отказ — docker не был в binaries."""
+    """Чтение логов через host_query: docker должен быть в binaries скила docker."""
     from skills.docker.tools import ACCESS
-    assert is_read_only(["sh", "-c", "docker logs --tail 100 x 2>&1 | grep -c error"], ACCESS.binaries)
+    assert is_read_only(["docker", "logs", "--tail", "100", "x"], ACCESS.binaries)
+    assert not is_read_only(["sh", "-c", "docker logs --tail 100 x 2>&1 | grep -c error"], ACCESS.binaries)
     assert not is_read_only(["docker", "rm", "-f", "x"], ACCESS.binaries)

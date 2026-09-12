@@ -34,9 +34,33 @@ def test_mutating_blocked():
     assert not _is_read_only(["rm", "-rf", "/"])
 
 
-def test_wrapped_pipeline_still_classified():
-    assert _is_read_only(["sh", "-c", "docker ps -a | grep remnanode"])
+def test_shell_wrapper_never_readonly():
+    assert not _is_read_only(["sh", "-c", "docker ps -a | grep remnanode"])
     assert not _is_read_only(["sh", "-c", "docker ps && docker restart remnanode"])
+
+
+@pytest.mark.parametrize("command", [
+    ["sh", "-c", "echo inspection\ntouch /tmp/f01-newline"],
+    ["sh", "-c", "printf audit | uniq - /tmp/f01-uniq"],
+    ["bash", "-c", "printf audit >& /tmp/f01-redirect"],
+    ["bash", "-lc", "uptime"],
+    ["sh", "-e", "-c", "df"],
+    ["uniq", "/etc/passwd", "/tmp/out"],
+    ["certbot", "certificates"],  # вне скоупа ноды
+])
+async def test_ssh_query_refuses_before_transport(command):
+    with mock.patch("skills.ssh.tools.shell_exec", new=mock.AsyncMock(return_value={})) as ssh:
+        out = await build_access_tools(HostAccess())[0].fn(host="10.0.0.1", command=command)
+    assert "error" in out
+    ssh.assert_not_called()
+
+
+async def test_ssh_query_runs_direct_df_with_quoted_argv():
+    with mock.patch("skills.ssh.tools.shell_exec", new=mock.AsyncMock(return_value={})) as ssh:
+        out = await build_access_tools(HostAccess())[0].fn(host="10.0.0.1", command=["df", "-h"])
+    assert "error" not in out
+    ssh.assert_awaited_once()
+    assert ssh.await_args.args[0][-1] == "df -h"
 
 
 def test_argv_quotes_remote_command_and_defaults_user():
@@ -49,9 +73,9 @@ def test_argv_quotes_remote_command_and_defaults_user():
 
 def test_binaries_extend_with_other_skills():
     """observe даёт top/vmstat — на ноде они должны читаться так же, как локально."""
-    assert not _is_read_only(["sh", "-c", "uptime; top -bn1 | head -8"])
+    assert not _is_read_only(["top", "-bn1"])
     with_observe = _node_binaries(HostAccess(binaries=frozenset({"top"})))
-    assert _is_read_only(["sh", "-c", "uptime; top -bn1 | head -8"], with_observe)
+    assert _is_read_only(["top", "-bn1"], with_observe)
     assert not _is_read_only(["rm", "-rf", "/"], with_observe)
 
 
