@@ -1,3 +1,4 @@
+import copy
 import json
 from dataclasses import dataclass, field
 from enum import Enum
@@ -58,13 +59,21 @@ class Tool:
             },
         }
 
-    async def execute(self, raw_args: dict) -> str:
+    def prepare(self, raw_args: dict) -> dict:
+        """Проверить аргументы и вернуть снимок, который показывают и исполняют.
+
+        `_intent` — пояснение для человека, не аргумент: вырезается до проверки
+        (у MCP-модели extra разрешены, и он ушёл бы на сервер). ValidationError —
+        аргументы невалидны, до подтверждения такой вызов не доходит.
+        """
+        args = {k: v for k, v in (raw_args or {}).items() if k != INTENT_FIELD}
+        return copy.deepcopy(self.params_model.model_validate(args).model_dump())
+
+    async def invoke(self, prepared: dict) -> str:
+        """Исполнить подготовленный снимок. Без повторной валидации — она могла бы
+        подставить другие defaults; копия — чтобы fn не поменял сам снимок."""
         try:
-            params = self.params_model.model_validate(raw_args or {})
-        except ValidationError as e:
-            return json.dumps({"error": e.errors(include_url=False)})
-        try:
-            result = await self.fn(**params.model_dump())
+            result = await self.fn(**copy.deepcopy(prepared))
         except Exception as e:
             # ошибку отдаём агенту как результат вызова, а не роняем всю задачу:
             # он увидит причину и попробует другой путь
@@ -72,6 +81,13 @@ class Tool:
         # Результат уходит в контекст модели, а оттуда — в историю, отчёт и память.
         # Секреты держат адаптеры; здесь — дополнительный слой на весь объект.
         return _to_json(scrub(result))
+
+    async def execute(self, raw_args: dict) -> str:
+        try:
+            prepared = self.prepare(raw_args)
+        except ValidationError as e:
+            return json.dumps({"error": e.errors(include_url=False)})
+        return await self.invoke(prepared)
 
 
 def _to_json(value: Any) -> str:

@@ -1,4 +1,7 @@
+import asyncio
 import json
+
+import pytest
 
 from app.agents.director import Director, _memory_index
 from app.agents.messages import Task
@@ -209,6 +212,117 @@ def test_memory_index_collapses_tail_when_budget_spent():
 
     assert lines[-1].startswith("  - ... ещё ")
     assert sum(len(l) // 4 + 1 for l in lines[:-1]) <= 40
+
+
+# ---------- подтверждения специалистов: отдельный запрос на каждый вызов (аудит F04) ----------
+
+class HostParams(BaseModel):
+    host: str
+
+
+class RoutingLLM:
+    """Отвечает по системному промпту: Директор спавнит двоих, каждый просит перезапуск."""
+
+    async def chat(self, messages, tools=None):
+        system = messages[0]["content"]
+        done = any(m.get("role") == "tool" for m in messages)
+        if system.startswith("Ты — Директор"):
+            if done:
+                return ChoiceMessage(content="Итог.", tool_calls=None)
+            return ChoiceMessage(content=None, tool_calls=[
+                ToolCall(id=f"s{n}", function=ToolCallFunction(name="spawn", arguments=json.dumps(
+                    {"role": f"агент {n}", "skills": ["ops"], "task": "перезапусти"})))
+                for n in ("A", "B")
+            ])
+        if done:
+            return ChoiceMessage(content="сделано", tool_calls=None)
+        host = "node-a" if "агент A" in system else "node-b"
+        return _call("restart", {"host": host, "_intent": f"Перезапущу {host}."})
+
+
+def _ops_library(executed: list) -> dict[str, Skill]:
+    async def _restart(host: str) -> dict:
+        executed.append(host)
+        return {"returncode": 0}
+
+    return {"ops": Skill(name="ops", description="ops", instructions="## ops",
+                         tools=[Tool("restart", "restart", HostParams, _restart, Safety.DANGEROUS)])}
+
+
+def _telegram_gateway():
+    import itertools
+    from unittest.mock import AsyncMock, MagicMock
+    from app.bot.gateway import TelegramConfirmationGateway
+
+    ids = itertools.count(100)
+    bot = MagicMock()
+    bot.send_message = AsyncMock(side_effect=lambda *a, **k: MagicMock(message_id=next(ids)))
+    gw = TelegramConfirmationGateway(bot, chat_id=1, timeout=30)
+    requests = []
+    original = gw.request
+
+    async def spy(req):
+        requests.append(req)
+        return await original(req)
+
+    gw.request = spy
+    return gw, bot, requests
+
+
+async def _wait_pending(gw, n):
+    for _ in range(200):
+        await asyncio.sleep(0)
+        if len(gw._pending) == n:
+            return
+
+
+async def test_two_specialists_get_separate_confirmations(tmp_path):
+    from app.agents.messages import Decision
+
+    facts.init_store(str(tmp_path / "f.db"))
+    executed: list[str] = []
+    gw, bot, requests = _telegram_gateway()
+    d = Director(llm=RoutingLLM(), gateway=gw, skills=_ops_library(executed))
+    root = Task(content="перезапусти обе ноды")
+    run = asyncio.create_task(d.handle(root))
+    await _wait_pending(gw, 2)
+
+    by_host = {}
+    for call in bot.send_message.call_args_list:
+        rid = call.kwargs["reply_markup"].inline_keyboard[0][0].callback_data.split(":")[1]
+        host = "node-a" if "node-a" in call.args[1] else "node-b"
+        by_host[host] = (rid, gw._pending[rid].message_id)
+    assert set(by_host) == {"node-a", "node-b"}
+    rid_a, msg_a = by_host["node-a"]
+    rid_b, msg_b = by_host["node-b"]
+    assert gw.resolve(rid_a, Decision.APPROVED, user_id=1, chat_id=1, message_id=msg_a)
+    assert gw.resolve(rid_b, Decision.REJECTED, user_id=1, chat_id=1, message_id=msg_b)
+    await run
+
+    assert executed == ["node-a"]
+    assert {r.run_id for r in requests} == {root.id}
+    assert len({r.agent_id for r in requests}) == 2
+    assert gw._pending == {}
+
+
+async def test_parent_cancel_clears_child_pending(tmp_path):
+    from app.agents.messages import Decision
+
+    facts.init_store(str(tmp_path / "f.db"))
+    executed: list[str] = []
+    gw, _bot, _requests = _telegram_gateway()
+    d = Director(llm=RoutingLLM(), gateway=gw, skills=_ops_library(executed))
+    run = asyncio.create_task(d.handle(Task(content="перезапусти")))
+    await _wait_pending(gw, 2)
+    stale = {rid: p.message_id for rid, p in gw._pending.items()}
+
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    assert gw._pending == {}
+    for rid, msg_id in stale.items():
+        assert not gw.resolve(rid, Decision.APPROVED, user_id=1, chat_id=1, message_id=msg_id)
+    assert executed == []
 
 
 async def test_remember_fact_shows_similar_but_writes_anyway(tmp_path):

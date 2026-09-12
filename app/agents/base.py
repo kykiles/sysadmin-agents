@@ -1,6 +1,11 @@
 import asyncio
+import copy
 import json
 import re
+import uuid
+
+from pydantic import ValidationError
+
 from app import audit
 from app.config import settings
 from app.llm.client import LLMClient
@@ -56,6 +61,8 @@ class Agent:
         # Без него опасные вызовы отклоняются — агент не может действовать вслепую.
         self._gateway = gateway
         self._memory = memory
+        # Имя у двух параллельных спавнов с одинаковыми навыками совпадает — id нет.
+        self.agent_id = f"{name}#{uuid.uuid4().hex[:8]}"
 
     def _find_tool(self, name: str) -> Tool | None:
         return next((t for t in self.tools if t.name == name), None)
@@ -76,30 +83,38 @@ class Agent:
 
     async def _run_dangerous(self, task: Task, tc, tool: Tool, reason: str) -> str:
         try:
-            args = parse_args(tc.function.arguments)
+            raw = parse_args(tc.function.arguments)
         except json.JSONDecodeError as e:
             return json.dumps({"error": f"invalid tool arguments: {e}"})
-        intent = str(args.pop(INTENT_FIELD, "") or "").strip()
+        intent = str(raw.get(INTENT_FIELD, "") or "").strip()
+        # Подтверждается и исполняется один снимок: подготовлен до запроса, человеку
+        # уходит копия, исполняется оригинал, который из агента не выходил (аудит F04/F05).
+        try:
+            prepared = tool.prepare(raw)
+        except ValidationError as e:
+            return json.dumps({"error": e.errors(include_url=False)})
         req = ConfirmationRequest(
-            task_id=task.id,
+            run_id=task.run_id or task.id,
+            agent_id=self.agent_id,
+            tool_call_id=tc.id,
             tool_name=tool.name,
-            args=args,
-            description=f"{tool.name} {args}",
+            args=copy.deepcopy(prepared),
             reason=intent or reason,
         )
-        log.info("confirmation_required", agent=self.name, tool=tool.name, args=redact(str(args)))
+        log.info("confirmation_required", agent=self.agent_id, tool=tool.name,
+                 args=redact(str(prepared)))
         decision = (
             await self._gateway.request(req) if self._gateway is not None
             else Decision.REJECTED
         )
-        if decision is Decision.REJECTED:
-            out = json.dumps({"error": "rejected by user"})
+        if decision is Decision.APPROVED:
+            out = await tool.invoke(prepared)
         else:
-            out = await tool.execute(args)
+            out = json.dumps({"error": "not approved: rejected, timed out or not delivered"})
         await audit.record(
             agent=self.name,
             tool=tool.name,
-            args=args,
+            args=prepared,
             decision=decision.value,
             result=audit.outcome(out),
         )

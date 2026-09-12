@@ -1,7 +1,10 @@
 import html
+import json
 import re
+import shlex
 
 from app.agents.messages import ConfirmationRequest
+from app.logging import redact
 
 # Разметка модели -> HTML Telegram. Экранируем ПЕРВЫМ делом, поэтому маркеры ищем
 # уже в экранированном тексте ('>' к этому моменту стал '&gt;').
@@ -85,41 +88,47 @@ def split_message(text: str, limit: int = 4000) -> list[str]:
     return parts
 
 
-def _format_command(tool_name: str, args: dict) -> str:
-    command = args.get("command")
-    if isinstance(command, list):
-        return " ".join(str(a) for a in command)
-    if command:
-        return str(command)
-    if args:
-        parts = " ".join(f"{k}={v}" for k, v in args.items())
-        return f"{tool_name} {parts}"
-    return tool_name
+TELEGRAM_LIMIT = 4096
+
+# Цель — первыми строками: без неё подтверждения для разных серверов совпадали
+# побайтно (аудит 2026-09-12, F05).
+_TARGET_KEYS = ("host", "container", "project")
+# Пояснение модели — не объект согласования, его можно укоротить.
+_REASON_LIMIT = 500
+# Превью, когда полный текст ушёл файлом: с экранированием заведомо влезает.
+_PREVIEW_LIMIT = 400
 
 
-# Лимит сообщения Telegram 4096; агенты шлют на подтверждение простыни на пару
-# килобайт, и целиком они не влезают вместе с заголовком и причиной.
-_COMMAND_LIMIT = 3000
+def confirmation_details(req: ConfirmationRequest) -> str:
+    """Что будет исполнено: инструмент, цель и каждый параметр — детерминированно,
+    из валидированных аргументов, а не из пересказа модели. Команда — через
+    shlex.join: `["sh", "-c", "a b"]` и `["sh", "-c", "a", "b"]` различимы.
+    Секреты заменены: человеку их показывать незачем."""
+    args = req.args
+    keys = [k for k in _TARGET_KEYS if k in args] + sorted(k for k in args if k not in _TARGET_KEYS)
+    lines = [f"инструмент: {req.tool_name}"]
+    for k in keys:
+        value = args[k]
+        if k == "command" and isinstance(value, list) and all(isinstance(a, str) for a in value):
+            shown = shlex.join(value)
+        else:
+            shown = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        lines.append(f"{k}: {shown}")
+    return redact("\n".join(lines))
 
 
-def _command_block(tool_name: str, args: dict) -> str:
-    command = _format_command(tool_name, args)
-    if len(command) > _COMMAND_LIMIT:
-        command = command[:_COMMAND_LIMIT] + " …(обрезано)"
-    return f"<blockquote expandable>{html.escape(command)}</blockquote>"
-
-
-def format_confirmation(req: ConfirmationRequest) -> str:
+def format_confirmation(req: ConfirmationRequest, request_id: str, details: str,
+                        attached: bool = False) -> str:
     lines = ["<b>Требуется подтверждение</b>"]
     reason = (req.reason or "").strip()
     if reason:
+        if len(reason) > _REASON_LIMIT:
+            reason = reason[:_REASON_LIMIT] + " …"
         lines.append(html.escape(reason))
-    lines.append(_command_block(req.tool_name, req.args))
+    if attached:
+        lines.append(f"<blockquote expandable>{html.escape(details[:_PREVIEW_LIMIT])} …</blockquote>")
+        lines.append(f"Полный запрос ({len(details)} символов) — в файле выше; исполнен будет ровно он.")
+    else:
+        lines.append(f"<blockquote expandable>{html.escape(details)}</blockquote>")
+    lines.append(f"Запрос: <code>{request_id}</code>")
     return "\n\n".join(lines)
-
-
-def format_auto_approved(req: ConfirmationRequest) -> str:
-    return "\n\n".join([
-        "<b>Авто-одобрено</b>",
-        _command_block(req.tool_name, req.args),
-    ])

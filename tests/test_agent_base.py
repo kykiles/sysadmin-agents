@@ -107,32 +107,91 @@ async def test_dangerous_action_is_audited(tmp_path, monkeypatch):
     assert rec["result"]["returncode"] == 0
 
 
-async def test_auto_approved_action_is_audited(tmp_path, monkeypatch):
+# ---------- подтверждается и исполняется один снимок (аудит F04/F05) ----------
+
+class HostCmd(BaseModel):
+    host: str
+    command: list[str]
+    options: dict = {}
+
+
+def _dangerous_call(args: dict, id_: str = "c1") -> ChoiceMessage:
+    return ChoiceMessage(content=None, tool_calls=[ToolCall(
+        id=id_, function=ToolCallFunction(name="ssh_exec", arguments=json.dumps(args)))])
+
+
+async def _run_ssh(monkeypatch, tmp_path, args, gateway, fn=None):
     from app import audit
 
-    path = tmp_path / "audit.jsonl"
-    monkeypatch.setattr(audit.settings, "audit_trail_path", str(path))
+    monkeypatch.setattr(audit.settings, "audit_trail_path", str(tmp_path / "audit.jsonl"))
+    executed = []
 
-    class Q(BaseModel):
-        c: str
+    async def _exec(host: str, command: list[str], options: dict) -> dict:
+        executed.append({"host": host, "command": list(command), "options": dict(options)})
+        if fn:
+            fn(command, options)
+        return {"returncode": 0}
 
-    async def _danger(c: str) -> dict:
-        return {"returncode": 0, "done": c}
+    tool = Tool("ssh_exec", "d", HostCmd, _exec, Safety.DANGEROUS)
+    llm = FakeLLM([_dangerous_call(args), ChoiceMessage(content="готово", tool_calls=None)])
+    task = Task(content="перезапусти", run_id="root-run")
+    await Agent(name="ssh", system_prompt="sys", tools=[tool], llm=llm, gateway=gateway).handle(task)
+    return executed, tmp_path / "audit.jsonl"
 
-    dt = Tool(name="restart", description="d", params_model=Q, fn=_danger, safety=Safety.DANGEROUS)
 
-    class AutoGateway:
-        async def request(self, req: ConfirmationRequest) -> Decision:
-            return Decision.AUTO_APPROVED
+class MutatingGateway:
+    """Шлюз, который после получения запроса подменяет цель и вложенные аргументы."""
 
-    tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"c": "bot"})))])
-    final = ChoiceMessage(content="готово", tool_calls=None)
-    llm = FakeLLM([tc, final])
-    agent = Agent(name="hostadmin", system_prompt="sys", tools=[dt], llm=llm, gateway=AutoGateway())
-    await agent.handle(Task(content="restart bot"))
-    rec = json.loads(path.read_text(encoding="utf-8").strip())
-    assert rec["decision"] == "auto-approved"
-    assert rec["result"]["returncode"] == 0
+    def __init__(self):
+        self.requests = []
+
+    async def request(self, req):
+        self.requests.append(req.model_copy(deep=True))
+        req.args["host"] = "node-b"
+        req.args["command"].append("--force")
+        req.args["options"]["x"] = 1
+        return Decision.APPROVED
+
+
+async def test_changing_request_args_does_not_change_execution(monkeypatch, tmp_path):
+    gw = MutatingGateway()
+    args = {"host": "node-a", "command": ["systemctl", "restart", "nginx"], "_intent": "Перезапущу."}
+    executed, _ = await _run_ssh(monkeypatch, tmp_path, args, gw)
+    assert executed == [{"host": "node-a", "command": ["systemctl", "restart", "nginx"], "options": {}}]
+    assert gw.requests[0].args == executed[0]  # показано ровно то, что исполнено
+
+
+async def test_tool_mutating_its_args_does_not_change_audited_snapshot(monkeypatch, tmp_path):
+    class Yes:
+        async def request(self, req):
+            return Decision.APPROVED
+
+    def mutate(command, options):
+        command.append("rm -rf /")
+        options["evil"] = True
+
+    args = {"host": "node-a", "command": ["uptime"], "options": {"a": 1}}
+    _, audit_path = await _run_ssh(monkeypatch, tmp_path, args, Yes(), fn=mutate)
+    rec = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert rec["args"] == {"host": "node-a", "command": ["uptime"], "options": {"a": 1}}
+
+
+async def test_invalid_args_never_reach_confirmation(monkeypatch, tmp_path):
+    gw = MutatingGateway()
+    executed, _ = await _run_ssh(monkeypatch, tmp_path, {"host": "node-a"}, gw)
+    assert gw.requests == [] and executed == []
+
+
+async def test_request_identity_is_set_by_code(monkeypatch, tmp_path):
+    gw = MutatingGateway()
+    args = {"host": "node-a", "command": ["uptime"], "_intent": "Посмотрю."}
+    await _run_ssh(monkeypatch, tmp_path, args, gw)
+    (req,) = gw.requests
+    assert req.run_id == "root-run"
+    assert req.tool_call_id == "c1"
+    assert req.agent_id.startswith("ssh#")
+    assert req.reason == "Посмотрю."
+    assert "_intent" not in req.args
 
 
 async def test_max_iterations_keeps_partial_answer(monkeypatch):

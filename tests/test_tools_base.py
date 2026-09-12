@@ -71,6 +71,47 @@ async def test_execute_returns_error_instead_of_raising():
     assert json.loads(out)["error"].startswith("FileNotFoundError")
 
 
+class Nested(BaseModel):
+    items: list[str]
+    opts: dict = {}
+    n: int = 3
+
+
+def test_prepare_strips_intent_and_returns_independent_copy():
+    t = Tool("t", "d", Nested, _echo, Safety.DANGEROUS)
+    raw = {"items": ["a"], "opts": {"k": [1]}, INTENT_FIELD: "Сделаю."}
+    prepared = t.prepare(raw)
+    assert prepared == {"items": ["a"], "opts": {"k": [1]}, "n": 3}
+    raw["items"].append("b")
+    raw["opts"]["k"].append(2)
+    assert prepared == {"items": ["a"], "opts": {"k": [1]}, "n": 3}
+
+
+def test_prepare_rejects_invalid_args():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Tool("t", "d", Nested, _echo).prepare({"items": "not-a-list"})
+
+
+async def test_invoke_runs_snapshot_without_revalidation_and_keeps_it_intact():
+    seen = []
+
+    async def fn(items, opts, n):
+        seen.append((list(items), dict(opts), n))
+        items.append("mutated")
+        opts["x"] = 1
+        return {"ok": True}
+
+    t = Tool("t", "d", Nested, fn)
+    prepared = {"items": ["a"], "opts": {}, "n": 7}
+    await t.invoke(prepared)
+    await t.invoke(prepared)
+    assert seen == [(["a"], {}, 7), (["a"], {}, 7)]
+    assert prepared == {"items": ["a"], "opts": {}, "n": 7}
+
+
 def test_host_tools_run_on_host_not_in_container():
     from app.tools.docker import host_exec
     from skills.host.tools import ACCESS

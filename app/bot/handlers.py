@@ -4,7 +4,7 @@ from pathlib import Path
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, FSInputFile
-from app.agents.messages import Task, Result
+from app.agents.messages import Decision, Task, Result
 from app.bot.filters import OwnerCallbackFilter, WhitelistFilter
 from app.config import settings
 from app.bot.keyboards import review_markup
@@ -156,18 +156,29 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
 
     @router.callback_query(F.data.startswith("cf:"))
     async def _confirm(callback: CallbackQuery):
-        _, task_id, choice = callback.data.split(":")
-        if gateway is not None:
-            if choice in ("yes", "all"):
-                gateway.approve(task_id, scope_all=choice == "all")
-            else:
-                gateway.reject(task_id)
-        labels = {"yes": "Yes", "no": "No", "all": "Yes, and don't ask again"}
-        await callback.answer(labels.get(choice, choice))
-        # html_text сохраняет уже отрендеренную разметку исходного сообщения;
-        # callback.message.text отдал бы её плоским текстом и потерял бы оформление
-        await callback.message.edit_text(
-            callback.message.html_text + f"\n\n<b>Решение:</b> {labels.get(choice, choice)}"
+        parts = callback.data.split(":")
+        # Старые форматы (cf:<task_id>:all) и чужие варианты ничего не решают.
+        if len(parts) != 3 or parts[2] not in ("yes", "no"):
+            await callback.answer("Кнопка устарела")
+            return
+        _, request_id, choice = parts
+        decision = Decision.APPROVED if choice == "yes" else Decision.REJECTED
+        resolved = gateway is not None and gateway.resolve(
+            request_id, decision, user_id=callback.from_user.id,
+            chat_id=callback.message.chat.id, message_id=callback.message.message_id,
         )
+        if not resolved:
+            await callback.answer("Запрос устарел или уже решён — ничего не выполнено")
+            return
+        label = "Yes" if choice == "yes" else "No"
+        await callback.answer(label)
+        # Запрос уже погашен: не удалось убрать кнопки — повторное нажатие всё равно
+        # ничего не решит. html_text сохраняет разметку исходного сообщения.
+        try:
+            await callback.message.edit_text(
+                callback.message.html_text + f"\n\n<b>Решение:</b> {label}"
+            )
+        except Exception:
+            log.warning("confirmation_edit_failed", request_id=request_id)
 
     return router

@@ -6,13 +6,15 @@ from pydantic import BaseModel, Field
 class Decision(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
-    AUTO_APPROVED = "auto-approved"
 
 
 class Task(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     content: str
     chat_id: str = ""
+    # Корневая задача Директора. У спавнутого агента своя Task, но run — общий:
+    # по нему подтверждения и журнал связываются с исходным запросом пользователя.
+    run_id: str = ""
 
 
 class Result(BaseModel):
@@ -32,8 +34,14 @@ class Result(BaseModel):
 
 
 class ConfirmationRequest(BaseModel):
-    task_id: str
+    """Запрос на один конкретный вызов. Идентификаторы задаёт код, а не модель;
+    одноразовый request_id выдаёт шлюз при отправке."""
+
+    run_id: str
+    agent_id: str
+    tool_call_id: str
     tool_name: str
+    # Валидированный снимок аргументов — ровно он показан и ровно он будет исполнен.
     args: dict
-    description: str
+    # Пояснение модели для человека; цель и параметры показываются отдельно из args.
     reason: str = ""

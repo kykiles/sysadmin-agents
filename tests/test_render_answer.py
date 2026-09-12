@@ -1,6 +1,6 @@
 from app.agents.messages import ConfirmationRequest
 from app.bot.render import (
-    format_auto_approved, format_confirmation, render_answer, split_message,
+    confirmation_details, format_confirmation, render_answer, split_message,
 )
 
 
@@ -97,17 +97,23 @@ def test_split_preserves_content():
     assert "\n".join(split_message(text)) == text
 
 
-def test_auto_approved_escapes_command():
+def _req(command):
+    return ConfirmationRequest(run_id="r", agent_id="a#1", tool_call_id="c1",
+                               tool_name="shell_exec", args={"command": command}, reason="r")
+
+
+def test_confirmation_escapes_command():
     """Сырой shell-скрипт в тексте ломал HTML-парсер Telegram, и сообщение не уходило."""
-    req = ConfirmationRequest(task_id="t", tool_name="shell_exec",
-                              args={"command": ["sh", "-c", 'echo > "$C"; a<b']},
-                              description="d", reason="r")
-    out = format_auto_approved(req)
+    req = _req(["sh", "-c", 'echo > "$C"; a<b'])
+    out = format_confirmation(req, "rid", confirmation_details(req))
     assert "&quot;$C&quot;" in out and "a&lt;b" in out
 
 
-def test_long_command_is_truncated():
-    req = ConfirmationRequest(task_id="t", tool_name="shell_exec",
-                              args={"command": ["sh", "-c", "x" * 9000]},
-                              description="d", reason="r")
-    assert len(format_confirmation(req)) < 4096
+def test_long_command_goes_to_attachment_preview():
+    """Длинный запрос не обрезается молча: превью в сообщении, полный текст — файлом."""
+    req = _req(["sh", "-c", "x" * 9000 + "; tail"])
+    details = confirmation_details(req)
+    assert details.endswith("; tail'")
+    out = format_confirmation(req, "rid", details, attached=True)
+    assert len(out) < 4096
+    assert "в файле выше" in out

@@ -1,7 +1,14 @@
 import asyncio
+from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock
-from app.agents.messages import Task, Result, Decision
+
+import pytest
+from aiogram.types import Chat, InaccessibleMessage
+
+from app.agents.messages import ConfirmationRequest, Task, Result, Decision
 from app.bot.gateway import TelegramConfirmationGateway
+
+MSG_ID = 10
 
 
 class FakeDirector:
@@ -12,46 +19,11 @@ class FakeDirector:
         return Result(task_id=task.id, content=self._result_text)
 
 
-async def test_callback_approve_resolves_gateway():
-    bot = MagicMock(); bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
-    gw = TelegramConfirmationGateway(bot, chat_id=1, timeout=30)
-
-    fut = asyncio.get_event_loop().create_future()
-    gw._pending["abc"] = fut
-
-    gw.approve("abc")
-    assert fut.result() is Decision.APPROVED
-
-
-async def test_callback_all_scopes_task_and_approves():
-    from app.bot.handlers import build_router
-    from unittest.mock import AsyncMock, MagicMock as MM
-    bot = MM(); bot.send_message = AsyncMock(return_value=MM(message_id=1))
-    gw = TelegramConfirmationGateway(bot, chat_id=1, timeout=30)
-
-    fut = asyncio.get_event_loop().create_future()
-    gw._pending["t1"] = fut
-
-    router = build_router(director=FakeDirector("ok"), gateway=gw, allowed_id=1, memory=MM())
-    handler = [h.callback for h in router.callback_query.handlers if h.callback.__name__ == "_confirm"][0]
-
-    cb = MM()
-    cb.data = "cf:t1:all"
-    cb.answer = AsyncMock()
-    cb.message = MM(); cb.message.text = "Подтвердите"; cb.message.edit_text = AsyncMock()
-
-    await handler(cb)
-    assert "t1" in gw._scoped
-    assert fut.result() is Decision.APPROVED
-
-
-def test_keyboard_has_allow_all_button():
+def test_keyboard_has_only_yes_and_no_for_one_request():
     from app.bot.keyboards import approve_keyboard
-    kb = approve_keyboard("t1", "shell_exec")
+    kb = approve_keyboard("r1")
     all_cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert "cf:t1:yes" in all_cbs
-    assert "cf:t1:no" in all_cbs
-    assert "cf:t1:all" in all_cbs
+    assert all_cbs == ["cf:r1:yes", "cf:r1:no"]
 
 
 def test_build_router_accepts_memory():
@@ -98,9 +70,6 @@ def test_with_quote():
 
 # ---------- авторизация через router: сообщения и все семейства кнопок (аудит F06) ----------
 
-import pytest
-from aiogram.types import Chat, InaccessibleMessage
-
 # Кто нажимает кнопку с корректным callback_data, но права не имеет.
 REFUSED = [
     pytest.param(dict(user=999), id="other-user"),
@@ -111,18 +80,19 @@ REFUSED = [
 ]
 
 
-def _cb(data, *, user=1, chat_type="private", chat_id=1, message="ok"):
+def _cb(data, *, user=1, chat_type="private", chat_id=1, message="ok", message_id=MSG_ID):
     cb = MagicMock()
     cb.data = data
     cb.from_user.id = user
     cb.answer = AsyncMock()
     if message == "inaccessible":
-        cb.message = InaccessibleMessage(chat=Chat(id=chat_id, type=chat_type), message_id=5)
+        cb.message = InaccessibleMessage(chat=Chat(id=chat_id, type=chat_type), message_id=message_id)
     elif message is None:
         cb.message = None
     else:
         cb.message.chat.type = chat_type
         cb.message.chat.id = chat_id
+        cb.message.message_id = message_id
         cb.message.html_text = "Подтвердите"
         cb.message.edit_text = AsyncMock()
     return cb
@@ -134,28 +104,53 @@ def _router(**kwargs):
                         memory=MagicMock(), **kwargs)
 
 
-def _gateway_with_pending():
-    bot = MagicMock(); bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
-    gw = TelegramConfirmationGateway(bot, chat_id=1, timeout=30)
-    fut = asyncio.get_event_loop().create_future()
-    gw._pending["t1"] = fut
-    return gw, fut
+def _gateway(timeout=30):
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=MSG_ID))
+    return TelegramConfirmationGateway(bot, chat_id=1, timeout=timeout)
+
+
+async def _pending(gw, tool="docker_restart"):
+    """Настоящий запрос, вставший в ожидание: (задача, request_id)."""
+    before = set(gw._pending)
+    task = asyncio.create_task(gw.request(ConfirmationRequest(
+        run_id="r1", agent_id="a#1", tool_call_id="c1", tool_name=tool, args={"container": "bot"})))
+    for _ in range(100):
+        await asyncio.sleep(0)
+        if set(gw._pending) - before:
+            break
+    (rid,) = set(gw._pending) - before
+    return task, rid
+
+
+async def _stop(task):
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
+async def _press(router, data, **caller):
+    cb = _cb(data, **caller)
+    await router.propagate_event(update_type="callback_query", event=cb)
+    return cb
 
 
 @pytest.mark.parametrize("caller", REFUSED)
-@pytest.mark.parametrize("choice", ["yes", "all", "no"])
+@pytest.mark.parametrize("choice", ["yes", "no"])
 async def test_confirm_callback_refused(caller, choice):
-    gw, fut = _gateway_with_pending()
-    await _router(gateway=gw).propagate_event(
-        update_type="callback_query", event=_cb(f"cf:t1:{choice}", **caller))
-    assert not fut.done()
-    assert gw._scoped == set()
+    gw = _gateway()
+    task, rid = await _pending(gw)
+    await _press(_router(gateway=gw), f"cf:{rid}:{choice}", **caller)
+    assert not task.done()
+    assert rid in gw._pending
+    await _stop(task)
 
 
 async def test_confirm_callback_owner_in_private_chat():
-    gw, fut = _gateway_with_pending()
-    await _router(gateway=gw).propagate_event(update_type="callback_query", event=_cb("cf:t1:yes"))
-    assert fut.result() is Decision.APPROVED
+    gw = _gateway()
+    task, rid = await _pending(gw)
+    await _press(_router(gateway=gw), f"cf:{rid}:yes")
+    assert await task is Decision.APPROVED
 
 
 def _learning():
@@ -167,15 +162,14 @@ def _learning():
 @pytest.mark.parametrize("caller", REFUSED)
 async def test_suggested_fact_callback_refused(caller):
     learning = _learning()
-    await _router(learning=learning).propagate_event(
-        update_type="callback_query", event=_cb("sf:s1:add", **caller))
+    await _press(_router(learning=learning), "sf:s1:add", **caller)
     assert "s1" in learning.pending
     learning.facts.remember.assert_not_called()
 
 
 async def test_suggested_fact_callback_owner():
     learning = _learning()
-    await _router(learning=learning).propagate_event(update_type="callback_query", event=_cb("sf:s1:add"))
+    await _press(_router(learning=learning), "sf:s1:add")
     assert learning.pending == {}
     learning.facts.remember.assert_called_once()
 
@@ -185,8 +179,7 @@ async def test_forget_fact_callback_refused(caller, monkeypatch):
     import app.bot.handlers as handlers
     monkeypatch.setattr(handlers, "resolve_fact", lambda facts, sid: ("infra", "k"))
     learning = _learning()
-    await _router(learning=learning).propagate_event(
-        update_type="callback_query", event=_cb("lf:s1:del", **caller))
+    await _press(_router(learning=learning), "lf:s1:del", **caller)
     learning.facts.forget.assert_not_called()
 
 
@@ -194,7 +187,7 @@ async def test_forget_fact_callback_owner(monkeypatch):
     import app.bot.handlers as handlers
     monkeypatch.setattr(handlers, "resolve_fact", lambda facts, sid: ("infra", "k"))
     learning = _learning()
-    await _router(learning=learning).propagate_event(update_type="callback_query", event=_cb("lf:s1:del"))
+    await _press(_router(learning=learning), "lf:s1:del")
     learning.facts.forget.assert_called_once_with("infra", "k")
 
 
@@ -221,6 +214,60 @@ async def test_task_message_only_from_owner_in_private_chat(sender, reaches):
     await _router(director=director).propagate_event(
         update_type="message", event=_msg(**sender), bot=MagicMock())
     assert director.handle.await_count == (1 if reaches else 0)
+
+
+# ---------- кнопка решает ровно один запрос (аудит F04) ----------
+
+async def test_duplicate_press_resolves_once():
+    gw = _gateway()
+    router = _router(gateway=gw)
+    task, rid = await _pending(gw)
+    await _press(router, f"cf:{rid}:yes")
+    again = await _press(router, f"cf:{rid}:no")
+    assert await task is Decision.APPROVED
+    assert "устарел" in again.answer.call_args.args[0]
+    again.message.edit_text.assert_not_called()
+
+
+async def test_stale_button_after_timeout_does_not_approve_next_request():
+    gw = _gateway(timeout=0.01)
+    router = _router(gateway=gw)
+    first, old_rid = await _pending(gw)
+    assert await first is Decision.REJECTED
+    gw._timeout = 30
+    second, new_rid = await _pending(gw, tool="shell_exec")
+    await _press(router, f"cf:{old_rid}:yes")
+    assert not second.done()
+    await _press(router, f"cf:{new_rid}:no")
+    assert await second is Decision.REJECTED
+
+
+async def test_button_of_other_message_resolves_nothing():
+    gw = _gateway()
+    task, rid = await _pending(gw)
+    await _press(_router(gateway=gw), f"cf:{rid}:yes", message_id=MSG_ID + 1)
+    assert not task.done()
+    await _stop(task)
+
+
+@pytest.mark.parametrize("data", ["cf:{rid}:all", "cf:{rid}", "cf:{rid}:yes:x"])
+async def test_old_or_malformed_callback_refused(data):
+    gw = _gateway()
+    task, rid = await _pending(gw)
+    await _press(_router(gateway=gw), data.format(rid=rid))
+    assert not task.done()
+    await _stop(task)
+
+
+async def test_edit_failure_does_not_restore_request():
+    gw = _gateway()
+    router = _router(gateway=gw)
+    task, rid = await _pending(gw)
+    cb = _cb(f"cf:{rid}:yes")
+    cb.message.edit_text = AsyncMock(side_effect=RuntimeError("message is not modified"))
+    await router.propagate_event(update_type="callback_query", event=cb)
+    assert await task is Decision.APPROVED
+    assert gw._pending == {}
 
 
 async def test_report_file_removed_after_send(tmp_path):

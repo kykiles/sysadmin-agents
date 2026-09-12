@@ -297,7 +297,7 @@ class Director(Agent):
             log.info("spawn", role=role, skills=skills)
             # Временный агент: не регистрируем в реестре, вызываем напрямую и забываем
             # вместе с контекстом. memory не передаём — истории у него быть не должно.
-            result = await sub.handle(Task(content=task))
+            result = await sub.handle(Task(content=task, run_id=self._run_id))
             self._sub_trace.extend(result.trace)
             self._agents_used.append(sub.name)
             return {"agent": sub.name, "result": result.content, "success": result.success}
@@ -404,6 +404,7 @@ class Director(Agent):
         self._sub_trace: list[str] = []
         self._agents_used: list[str] = []
         self._report_path: str = ""
+        self._run_id: str = ""
 
     def reload_library(self, skills: dict) -> None:
         """Подхватить обновлённые навыки без рестарта процесса."""
@@ -420,13 +421,9 @@ class Director(Agent):
             self._agents_used = []
             self._untrusted_used = False
             self._report_path = ""
+            self._run_id = task.run_id or task.id
             self.system_prompt = self._base_prompt + await asyncio.to_thread(_memory_index)
-            try:
-                result = await super().handle(task)
-            finally:
-                # «Не спрашивать снова» действует в пределах одной задачи
-                if self._gateway is not None:
-                    self._gateway.release(task.id)
+            result = await super().handle(task)
             result.attachment = self._report_path
             if self._journal is not None:
                 await self._write_journal(task, result)
