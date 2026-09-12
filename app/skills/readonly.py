@@ -9,9 +9,17 @@ tls, security и ssh, — и копии разошлись: список read-on
 Классификация аргументов (какие подкоманды `systemctl` читают, а какие меняют)
 универсальна — она зависит от команды, а не от того, кто её вызвал.
 
+Классификация — белый список: у каждой утилиты явный контракт argv (флаги, опции
+со значением, позиционные, подкоманды). Всё, чего в контракте нет, — отказ. Чёрный
+список изменяющих флагов обходился формой `--vacuum-time=1s`, а «безопасных при
+любых аргументах» утилит не бывает: `date -s`, `hostname NAME`, `ss -K` (аудит
+2026-09-12, F02). Форма без короткого понятного контракта в SAFE не попадает —
+для неё есть инструмент с подтверждением.
+
 При спавне доступы выданных скилов объединяются в один инструмент `host_query`,
 поэтому имя у него одно и коллизии имён с разным скоупом невозможны.
 """
+import re
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -34,107 +42,474 @@ class HostAccess:
         )
 
 
-# ---------- бинарники, безопасные при любых аргументах ----------
+# ---------- контракт argv ----------
 
-_ALWAYS_SAFE = frozenset({
-    # состояние системы
-    "df", "du", "free", "uptime", "uname", "hostname", "date", "id", "nproc", "echo",
-    "lsblk", "lscpu", "vmstat", "iostat", "mpstat", "ps", "top",
-    "who", "w", "lsof", "ss", "getent", "lastlog",
-    # файлы и текст: чтение не меняет состояние
-    "ls", "stat", "cat", "head", "tail", "zcat", "grep", "egrep", "wc",
-    "readlink", "test",
-})
+Check = Callable[[str], bool]
 
 
-# ---------- бинарники, у которых читающими являются только часть вызовов ----------
+@dataclass(frozen=True)
+class Argv:
+    """Допустимые аргументы одной утилиты (или одной её подкоманды).
 
-_SYSTEMCTL_READONLY = frozenset({
-    "status", "show", "cat", "is-active", "is-enabled", "is-failed",
-    "list-units", "list-unit-files", "list-timers", "list-sockets", "get-default",
-})
+    Опции с необязательным значением (`--color[=when]`, `date -I[fmt]`) сюда не
+    вносим: getopt не берёт для них следующий аргумент, а разбор ниже взял бы —
+    и позиционный аргумент утилиты (например, новое время для `date`) проскочил
+    бы под видом значения опции. `--` не поддерживается по той же причине.
+    """
 
-_IPTABLES_LISTING = frozenset({"-L", "--list", "-S", "--list-rules"})
-_IPTABLES_MUTATING = frozenset({
-    "-A", "--append", "-I", "--insert", "-D", "--delete", "-R", "--replace",
-    "-F", "--flush", "-X", "--delete-chain", "-P", "--policy", "-N", "--new-chain",
-    "-Z", "--zero", "-E", "--rename-chain",
-})
-
-_IP_MUTATING = frozenset({"add", "del", "delete", "set", "change", "replace", "flush"})
-
-_JOURNALCTL_MUTATING = frozenset({
-    "--rotate", "--vacuum-size", "--vacuum-time", "--vacuum-files", "--flush", "--sync",
-})
-
-_APT_READONLY = frozenset({"-s", "--simulate", "--dry-run"})
-
-# find умеет удалять и запускать что угодно, openssl — писать файлы, dmesg — чистить
-# буфер: читающие по названию, но не по любым аргументам.
-_FIND_MUTATING = frozenset({
-    "-delete", "-exec", "-execdir", "-ok", "-okdir",
-    "-fprint", "-fprint0", "-fprintf", "-fls",
-})
-_OPENSSL_WRITING = frozenset({"-out", "-keyout"})
-_DMESG_MUTATING = frozenset({
-    "-C", "--clear", "-c", "--read-clear", "-D", "--console-off",
-    "-E", "--console-on", "-n", "--console-level", "-S", "--syslog",
-})
-
-# На ноде docker доступен только через ssh, сокета у нас там нет.
-_DOCKER_READONLY = frozenset({
-    "ps", "logs", "inspect", "stats", "images", "version", "info", "top", "port", "diff",
-})
+    flags: frozenset[str] = frozenset()
+    valued: dict[str, Check] = field(default_factory=dict)
+    positional: Callable[[list[str]], bool] = lambda ps: not ps
+    # первое позиционное выбирает контракт остальных аргументов
+    subcommands: dict[str, "Argv"] | None = None
+    # хотя бы одна из этих опций обязана быть (здесь или до подкоманды)
+    require: frozenset[str] = frozenset()
+    # опции-слова с одним дефисом (`find -name`, `openssl -noout`): не склейка букв
+    single_dash: bool = False
+    # аргументы не опции, а данные: echo печатает, test сравнивает
+    raw: bool = False
 
 
-def _subcommands(args: list[str]) -> list[str]:
-    return [a for a in args if not a.startswith("-")]
+def _re(pattern: str) -> Check:
+    rx = re.compile(pattern)
+    return lambda v: bool(rx.fullmatch(v))
 
 
-def _systemctl(args: list[str]) -> bool:
-    subs = _subcommands(args)
-    return bool(subs) and subs[0] in _SYSTEMCTL_READONLY
+def _word(v: str) -> bool:
+    return bool(v) and not v.startswith("-")
 
 
-def _iptables(args: list[str]) -> bool:
-    if any(a in _IPTABLES_MUTATING for a in args):
+def _any(v: str) -> bool:
+    return True
+
+
+_INT = _re(r"\d+")
+_SIGNED = _re(r"[+-]?\d+[a-zA-Z]?")
+_COUNT = _re(r"[+-]?\d+[a-zA-Z]*")
+_NAME = _re(r"[A-Za-z0-9][A-Za-z0-9@._:+-]*")
+
+
+def _paths(ps: list[str]) -> bool:
+    return True
+
+
+def _upto(n: int, check: Check = _word) -> Callable[[list[str]], bool]:
+    return lambda ps: len(ps) <= n and all(check(p) for p in ps)
+
+
+def _each(check: Check) -> Callable[[list[str]], bool]:
+    return lambda ps: all(check(p) for p in ps)
+
+
+def _opts(*names: str) -> frozenset[str]:
+    return frozenset(names)
+
+
+def _valid(spec: Argv, args: list[str], seen: set[str] | None = None) -> bool:
+    if spec.raw:
+        return True
+    seen = set() if seen is None else seen
+    pos: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if a.startswith("-") and a != "-":
+            i = _option(spec, a, args, i, seen)
+            if i is None:
+                return False
+            continue
+        if spec.subcommands is not None:
+            sub = spec.subcommands.get(a)
+            return sub is not None and _valid(sub, args[i:], seen)
+        pos.append(a)
+    if spec.subcommands is not None:
         return False
-    return any(a in _IPTABLES_LISTING for a in args)
+    if spec.require and not spec.require & seen:
+        return False
+    return spec.positional(pos)
 
 
-def _apt(args: list[str]) -> bool:
-    subs = _subcommands(args)
-    return subs[:1] == ["list"] or any(a in _APT_READONLY for a in args)
+def _option(spec: Argv, a: str, args: list[str], i: int, seen: set[str]) -> int | None:
+    """Разобрать одну опцию; вернуть индекс следующего аргумента или None при отказе."""
+    if spec.single_dash or a.startswith("--"):
+        name, eq, value = (a, "", "") if spec.single_dash else a.partition("=")
+        if name in spec.flags and not eq:
+            seen.add(name)
+            return i
+        check = spec.valued.get(name)
+        if check is None:
+            return None
+        if not eq:
+            if i >= len(args):
+                return None
+            value, i = args[i], i + 1
+        if not check(value):
+            return None
+        seen.add(name)
+        return i
+    # склейка коротких: -tlnp, -bn1 (последняя опция со значением забирает хвост)
+    for j in range(1, len(a)):
+        opt = "-" + a[j]
+        if opt in spec.flags:
+            seen.add(opt)
+            continue
+        check = spec.valued.get(opt)
+        if check is None:
+            return None
+        value = a[j + 1:]
+        if not value:
+            if i >= len(args):
+                return None
+            value, i = args[i], i + 1
+        if not check(value):
+            return None
+        seen.add(opt)
+        return i
+    return i
 
 
-def _docker(args: list[str]) -> bool:
-    subs = _subcommands(args)
-    if subs[:1] == ["compose"]:
-        subs = subs[1:]
-    return bool(subs) and subs[0] in _DOCKER_READONLY
+# ---------- контракты утилит ----------
+
+_GREP = Argv(
+    flags=_opts(
+        "-i", "-v", "-c", "-l", "-L", "-n", "-h", "-H", "-o", "-q", "-s", "-r", "-R",
+        "-w", "-x", "-E", "-F", "-G", "-P", "-a", "-I", "-z", "-Z", "-b",
+        "--ignore-case", "--invert-match", "--count", "--files-with-matches",
+        "--files-without-match", "--line-number", "--no-filename", "--with-filename",
+        "--only-matching", "--quiet", "--silent", "--no-messages", "--recursive",
+        "--dereference-recursive", "--word-regexp", "--line-regexp", "--extended-regexp",
+        "--fixed-strings", "--perl-regexp", "--text", "--null", "--null-data",
+    ),
+    valued={
+        "-e": _any, "--regexp": _any, "-f": _word, "--file": _word,
+        "-m": _INT, "--max-count": _INT,
+        "-A": _INT, "-B": _INT, "-C": _INT,
+        "--after-context": _INT, "--before-context": _INT, "--context": _INT,
+        "--include": _any, "--exclude": _any, "--exclude-dir": _any,
+    },
+    positional=_paths,
+)
+
+_HEAD_TAIL = Argv(
+    flags=_opts("-q", "-v", "-z", "--quiet", "--silent", "--verbose", "--zero-terminated"),
+    valued={"-n": _COUNT, "--lines": _COUNT, "-c": _COUNT, "--bytes": _COUNT},
+    positional=_paths,
+)
+
+_IPTABLES = Argv(
+    flags=_opts("-L", "--list", "-S", "--list-rules", "-n", "--numeric",
+                "-v", "--verbose", "-x", "--exact", "--line-numbers"),
+    valued={"-t": _re(r"filter|nat|mangle|raw|security"),
+            "--table": _re(r"filter|nat|mangle|raw|security")},
+    # -L/-S принимают необязательную цепочку (и номер правила у -S)
+    positional=_upto(2, _re(r"[A-Za-z0-9_-]+")),
+    require=_opts("-L", "--list", "-S", "--list-rules"),
+)
+
+_SYSTEMCTL_OPTS = dict(
+    flags=_opts("--no-pager", "-l", "--full", "-a", "--all", "--no-legend", "--plain",
+                "-q", "--quiet", "--failed", "--value", "--system"),
+    valued={"-n": _INT, "--lines": _INT, "-t": _word, "--type": _word,
+            "--state": _word, "-p": _word, "--property": _word,
+            "-o": _word, "--output": _word},
+)
+_SYSTEMCTL = Argv(
+    **_SYSTEMCTL_OPTS,
+    subcommands={
+        sub: Argv(**_SYSTEMCTL_OPTS, positional=_each(_re(r"[A-Za-z0-9@._:\\*\[\]-]+")))
+        for sub in (
+            "status", "show", "cat", "is-active", "is-enabled", "is-failed",
+            "list-units", "list-unit-files", "list-timers", "list-sockets", "get-default",
+        )
+    },
+)
+
+# ip: после объекта — только просмотр. `ip netns exec`, `ip -batch`, `ip link set`
+# сюда не попадают: объекта netns и опций -b/-n/-a в контракте нет.
+_IP_SHOW = frozenset({"show", "list", "lst", "ls"})
 
 
-_CHECKS: dict[str, Callable[[list[str]], bool]] = {
-    "find": lambda args: not any(a in _FIND_MUTATING for a in args),
-    "openssl": lambda args: not any(a in _OPENSSL_WRITING for a in args),
-    "dmesg": lambda args: not any(a in _DMESG_MUTATING for a in args),
-    "crontab": lambda args: args[:1] == ["-l"],
-    "iptables": _iptables,
-    "ip6tables": _iptables,
-    "ip": lambda args: not any(a in _IP_MUTATING for a in args),
-    "systemctl": _systemctl,
-    "journalctl": lambda args: not any(a in _JOURNALCTL_MUTATING for a in args),
-    "ufw": lambda args: _subcommands(args)[:1] == ["status"],
-    "fail2ban-client": lambda args: _subcommands(args)[:1] in (["status"], ["get"], ["ping"]),
-    "sshd": lambda args: "-T" in args,  # только дамп эффективного конфига
-    "apt": _apt,
-    "apt-get": _apt,
-    "certbot": lambda args: _subcommands(args)[:1] == ["certificates"],
-    "docker": _docker,
+def _ip_view(verbs: frozenset[str]) -> Argv:
+    return Argv(positional=lambda ps: not ps or ps[0] in verbs)
+
+
+_IP = Argv(
+    flags=_opts("-4", "-6", "-br", "-brief", "-s", "-stats", "-statistics", "-d", "-details",
+                "-j", "-json", "-p", "-pretty", "-o", "-oneline", "-c", "-color",
+                "-h", "-human"),
+    single_dash=True,
+    subcommands={
+        **{obj: _ip_view(_IP_SHOW) for obj in (
+            "address", "addr", "a", "link", "l", "neighbour", "neighbor", "neigh", "n",
+            "rule", "ru",
+        )},
+        **{obj: _ip_view(_IP_SHOW | {"get"}) for obj in ("route", "ro", "r")},
+    },
+)
+
+_APT_SIMULATE = _opts("-s", "--simulate", "--dry-run", "--just-print", "--no-act", "--recon")
+_APT_PKGS = _each(_re(r"[A-Za-z0-9][A-Za-z0-9.+:*_-]*"))
+_APT = Argv(
+    flags=_APT_SIMULATE | {"-q"},
+    subcommands={
+        "list": Argv(flags=_opts("--upgradable", "--installed", "--manual-installed",
+                                 "-a", "--all-versions", "-q"),
+                     positional=_APT_PKGS),
+        # установка и обновление — только симуляция; -o/-c в контракте нет, иначе
+        # `-o APT::Get::Simulate=false` отменил бы -s
+        **{sub: Argv(flags=_APT_SIMULATE | {"-q"}, positional=_APT_PKGS, require=_APT_SIMULATE)
+           for sub in ("upgrade", "dist-upgrade", "full-upgrade", "install")},
+    },
+)
+
+_DOCKER_NAME = _re(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+_DOCKER = Argv(subcommands={
+    "ps": Argv(flags=_opts("-a", "--all", "-q", "--quiet", "-s", "--size", "--no-trunc",
+                           "-l", "--latest"),
+               valued={"-n": _INT, "--last": _INT, "-f": _word, "--filter": _word,
+                       "--format": _any}),
+    "logs": Argv(flags=_opts("-t", "--timestamps", "--details"),
+                 valued={"-n": _re(r"\d+|all"), "--tail": _re(r"\d+|all"),
+                         "--since": _word, "--until": _word},
+                 positional=lambda ps: len(ps) == 1 and _DOCKER_NAME(ps[0])),
+    "inspect": Argv(flags=_opts("-s", "--size"),
+                    valued={"-f": _any, "--format": _any, "--type": _word},
+                    positional=lambda ps: bool(ps) and all(_DOCKER_NAME(p) for p in ps)),
+    "stats": Argv(flags=_opts("--no-stream", "--no-trunc", "-a", "--all"),
+                  valued={"--format": _any}, positional=_each(_DOCKER_NAME)),
+    "images": Argv(flags=_opts("-a", "--all", "-q", "--quiet", "--digests", "--no-trunc"),
+                   valued={"-f": _word, "--filter": _word, "--format": _any},
+                   positional=_upto(1)),
+    "version": Argv(valued={"-f": _any, "--format": _any}),
+    "info": Argv(valued={"-f": _any, "--format": _any}),
+    "top": Argv(positional=lambda ps: 1 <= len(ps) <= 2 and _DOCKER_NAME(ps[0])
+                and all(_re(r"[A-Za-z]+")(p) for p in ps[1:])),
+    "port": Argv(positional=lambda ps: 1 <= len(ps) <= 2 and _DOCKER_NAME(ps[0])
+                 and all(_re(r"\d+(/(tcp|udp))?")(p) for p in ps[1:])),
+    "diff": Argv(positional=lambda ps: len(ps) == 1 and _DOCKER_NAME(ps[0])),
+    "compose": Argv(
+        valued={"-p": _word, "--project-name": _word, "-f": _word, "--file": _word,
+                "--project-directory": _word},
+        subcommands={"ps": Argv(flags=_opts("-a", "--all", "-q", "--quiet", "--services"),
+                                valued={"--format": _any, "--status": _word, "--filter": _word},
+                                positional=_each(_DOCKER_NAME))},
+    ),
+})
+
+_FIND = Argv(
+    flags=_opts("-L", "-H", "-P", "-print", "-print0", "-ls", "-prune", "-xdev", "-mount",
+                "-follow", "-empty", "-readable", "-writable", "-executable", "-true",
+                "-false", "-nouser", "-nogroup", "-not", "-a", "-o", "-and", "-or", "-quit",
+                "-daystart", "-depth", "-noleaf"),
+    valued={
+        **dict.fromkeys(("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename",
+                         "-regex", "-iregex", "-lname", "-ilname", "-printf"), _any),
+        **dict.fromkeys(("-type", "-xtype"), _re(r"[bcdpflsD](,[bcdpflsD])*")),
+        **dict.fromkeys(("-maxdepth", "-mindepth"), _INT),
+        **dict.fromkeys(("-mtime", "-atime", "-ctime", "-mmin", "-amin", "-cmin", "-size",
+                         "-links", "-inum", "-uid", "-gid", "-used"), _SIGNED),
+        **dict.fromkeys(("-user", "-group", "-newer", "-anewer", "-cnewer", "-samefile",
+                         "-fstype", "-regextype"), _word),
+        "-perm": _re(r"[-/]?([0-7]{1,4}|[ugoa]*[-+=][rwxXst]*(,[ugoa]*[-+=][rwxXst]*)*)"),
+    },
+    positional=_paths,  # пути и `!`, `(`, `)`
+    single_dash=True,
+)
+
+_OPENSSL = Argv(single_dash=True, subcommands={
+    # только осмотр сертификата: ни -out, ни подписи, ни -CAcreateserial
+    "x509": Argv(
+        flags=_opts("-noout", "-subject", "-issuer", "-dates", "-enddate", "-startdate",
+                    "-serial", "-fingerprint", "-text", "-hash", "-subject_hash",
+                    "-issuer_hash", "-email", "-purpose", "-pubkey", "-modulus",
+                    "-ocsp_uri", "-sha1", "-sha256"),
+        valued={"-in": _word, "-inform": _re(r"(?i)pem|der"), "-nameopt": _word,
+                "-ext": _word, "-checkend": _INT, "-certopt": _word},
+        single_dash=True,
+    ),
+    "version": Argv(flags=_opts("-a", "-b", "-o", "-f", "-p", "-d", "-e", "-m", "-r", "-c", "-v"),
+                    single_dash=True),
+})
+
+_SPECS: dict[str, Argv] = {
+    # состояние системы
+    "df": Argv(flags=_opts("-h", "-H", "-T", "-i", "-a", "-l", "-P", "-k",
+                           "--human-readable", "--si", "--print-type", "--inodes", "--all",
+                           "--local", "--portability", "--total"),
+               valued={"-t": _word, "--type": _word, "-x": _word, "--exclude-type": _word,
+                       "-B": _word, "--block-size": _word},
+               positional=_paths),
+    "du": Argv(flags=_opts("-h", "-s", "-a", "-c", "-x", "-b", "-k", "-m", "-S", "-L", "-l",
+                           "--human-readable", "--summarize", "--all", "--total",
+                           "--one-file-system", "--apparent-size", "--bytes", "--si",
+                           "--separate-dirs", "--dereference", "--count-links"),
+               valued={"-d": _INT, "--max-depth": _INT, "-t": _SIGNED, "--threshold": _SIGNED,
+                       "--exclude": _any, "-B": _word, "--block-size": _word},
+               positional=_paths),
+    "free": Argv(flags=_opts("-h", "-m", "-g", "-k", "-b", "-t", "-w", "-l", "-v",
+                             "--human", "--mega", "--giga", "--kilo", "--bytes", "--total",
+                             "--wide", "--lohi", "--si", "--committed")),
+    "uptime": Argv(flags=_opts("-p", "-s", "--pretty", "--since")),
+    "uname": Argv(flags=_opts("-a", "-s", "-n", "-r", "-v", "-m", "-p", "-i", "-o",
+                              "--all", "--kernel-name", "--nodename", "--kernel-release",
+                              "--kernel-version", "--machine", "--processor",
+                              "--hardware-platform", "--operating-system")),
+    # имя хоста без позиционного — позиционный его меняет
+    "hostname": Argv(flags=_opts("-f", "-s", "-i", "-I", "-d", "-A", "--fqdn", "--long",
+                                 "--short", "--ip-address", "--all-ip-addresses",
+                                 "--domain", "--all-fqdns")),
+    # единственный позиционный — формат вывода `+...`; `MMDDhhmm` меняет время
+    "date": Argv(flags=_opts("-u", "--utc", "--universal", "-R", "--rfc-email"),
+                 valued={"-d": _any, "--date": _any, "-r": _word, "--reference": _word,
+                         "--rfc-3339": _re(r"date|seconds|ns")},
+                 positional=_upto(1, lambda p: p.startswith("+"))),
+    "id": Argv(flags=_opts("-u", "-g", "-G", "-n", "-r", "-a", "-z", "--user", "--group",
+                           "--groups", "--name", "--real", "--zero"),
+               positional=_upto(1)),
+    "nproc": Argv(flags=_opts("--all"), valued={"--ignore": _INT}),
+    "echo": Argv(raw=True),
+    "lsblk": Argv(flags=_opts("-a", "-b", "-d", "-f", "-l", "-m", "-n", "-p", "-J", "-S", "-t",
+                              "-z", "-O", "--all", "--bytes", "--nodeps", "--fs", "--list",
+                              "--perms", "--noheadings", "--paths", "--json", "--scsi",
+                              "--topology", "--output-all"),
+                  valued={"-o": _word, "--output": _word, "-e": _word, "--exclude": _word,
+                          "-I": _word, "--include": _word},
+                  positional=_paths),
+    "lscpu": Argv(flags=_opts("-a", "-b", "-c", "-J", "-y", "-x", "--all", "--online",
+                              "--offline", "--json", "--hex", "--physical")),
+    "vmstat": Argv(flags=_opts("-a", "-f", "-m", "-n", "-s", "-d", "-D", "-t", "-w",
+                               "--active", "--forks", "--slabs", "--one-header", "--stats",
+                               "--disk", "--disk-sum", "--timestamp", "--wide"),
+                   valued={"-S": _word, "--unit": _word, "-p": _word, "--partition": _word},
+                   positional=_upto(2, _INT)),
+    "iostat": Argv(flags=_opts("-c", "-d", "-h", "-k", "-m", "-N", "-s", "-t", "-x", "-y", "-z"),
+                   valued={"-o": _re(r"JSON")},
+                   positional=_each(_re(r"[A-Za-z0-9_-]+"))),
+    "mpstat": Argv(flags=_opts("-A", "-u", "-T"),
+                   valued={"-P": _word, "-I": _word, "-N": _word, "-o": _re(r"JSON")},
+                   positional=_upto(2, _INT)),
+    "ps": Argv(flags=_opts("-A", "-a", "-d", "-e", "-f", "-F", "-H", "-j", "-l", "-L", "-M",
+                           "-T", "-w", "-x", "-y", "-c", "--forest", "--no-headers",
+                           "--headers"),
+               valued={"-o": _word, "-O": _word, "--format": _word, "-p": _word,
+                       "--pid": _word, "-u": _word, "--user": _word, "-U": _word,
+                       "-C": _word, "-g": _word, "-G": _word, "-t": _word, "-q": _word,
+                       "--sort": _any},
+               positional=_each(_re(r"[A-Za-z]+"))),  # BSD-опции: aux
+    "top": Argv(flags=_opts("-b", "-c", "-H", "-i", "-S", "-1"),
+                valued={"-n": _INT, "-d": _re(r"\d+(\.\d+)?"), "-o": _word, "-p": _word,
+                        "-u": _word, "-U": _word, "-E": _re(r"[kmgtpe]"),
+                        "-e": _re(r"[kmgtp]")}),
+    "who": Argv(flags=_opts("-a", "-b", "-d", "-H", "-l", "-m", "-p", "-q", "-r", "-s", "-t",
+                            "-T", "-u", "--all", "--boot", "--dead", "--heading", "--login",
+                            "--lookup", "--process", "--count", "--runlevel", "--short",
+                            "--time", "--users", "--mesg"),
+                positional=_upto(2)),
+    "w": Argv(flags=_opts("-h", "-s", "-f", "-i", "-o", "-u", "--no-header", "--short",
+                          "--from", "--ip-addr", "--old-style", "--no-current"),
+              positional=_upto(1)),
+    # -D пишет кэш устройств, +m — файл mount supplement: ни того, ни `+`-опций
+    "lsof": Argv(flags=_opts("-n", "-P", "-t", "-l", "-w", "-V", "-R", "-i", "-4", "-6",
+                             "-U", "-a"),
+                 valued={"-p": _word, "-u": _word, "-c": _word},
+                 positional=_each(lambda p: not p.startswith("+"))),
+    # -K закрывает сокеты, -D пишет дамп в файл, -N меняет netns
+    "ss": Argv(flags=_opts("-t", "-u", "-l", "-n", "-p", "-a", "-e", "-m", "-o", "-i", "-s",
+                           "-x", "-w", "-4", "-6", "-H", "-r", "-O", "-0",
+                           "--tcp", "--udp", "--listening", "--numeric", "--processes",
+                           "--all", "--extended", "--memory", "--options", "--info",
+                           "--summary", "--unix", "--raw", "--no-header", "--resolve",
+                           "--oneline", "--ipv4", "--ipv6", "--packet"),
+               valued={"-f": _word, "--family": _word, "-A": _word, "--query": _word,
+                       "--socket": _word},
+               positional=_paths),  # выражение фильтра: state established '( dport = :443 )'
+    "getent": Argv(flags=_opts("-i", "--no-idn"), valued={"-s": _word, "--service": _word},
+                   positional=lambda ps: bool(ps)),
+    # -C/-S очищают и выставляют записи
+    "lastlog": Argv(valued={"-u": _word, "--user": _word, "-b": _INT, "--before": _INT,
+                            "-t": _INT, "--time": _INT}),
+    # файлы и текст
+    "ls": Argv(flags=_opts("-a", "-A", "-l", "-h", "-d", "-R", "-t", "-r", "-S", "-1", "-F",
+                           "-i", "-n", "-L", "-Z", "-s", "-X", "-c", "-u", "-g", "-o", "-p",
+                           "-Q", "-N", "-v", "-x", "-m", "-H", "-G",
+                           "--all", "--almost-all", "--human-readable", "--directory",
+                           "--recursive", "--full-time", "--inode", "--numeric-uid-gid",
+                           "--dereference", "--classify", "--context",
+                           "--group-directories-first", "--si", "--size", "--reverse"),
+               valued={"--sort": _word, "--time": _word, "--time-style": _any,
+                       "-I": _any, "--ignore": _any, "-w": _INT, "--width": _INT},
+               positional=_paths),
+    "stat": Argv(flags=_opts("-L", "-f", "-t", "--dereference", "--file-system", "--terse"),
+                 valued={"-c": _any, "--format": _any, "--printf": _any},
+                 positional=_paths),
+    "cat": Argv(flags=_opts("-A", "-b", "-e", "-E", "-n", "-s", "-t", "-T", "-u", "-v",
+                            "--number", "--show-all", "--number-nonblank", "--squeeze-blank",
+                            "--show-ends", "--show-tabs", "--show-nonprinting"),
+                positional=_paths),
+    "head": _HEAD_TAIL,
+    "tail": _HEAD_TAIL,  # без -f/-F: слежение висит до таймаута
+    "zcat": Argv(flags=_opts("-f", "-q", "-v", "-l", "-t"), positional=_paths),
+    "grep": _GREP,
+    "egrep": _GREP,
+    "wc": Argv(flags=_opts("-l", "-w", "-c", "-m", "-L", "--lines", "--words", "--bytes",
+                           "--chars", "--max-line-length"),
+               positional=_paths),
+    "readlink": Argv(flags=_opts("-f", "-e", "-m", "-n", "-q", "-s", "-v", "-z",
+                                 "--canonicalize", "--canonicalize-existing",
+                                 "--canonicalize-missing"),
+                     positional=_paths),
+    "test": Argv(raw=True),
+    # утилиты с подкомандами и режимами
+    "find": _FIND,
+    "openssl": _OPENSSL,
+    # -C/-c чистят буфер, -D/-E/-n меняют консоль, -w следит
+    "dmesg": Argv(flags=_opts("-T", "--ctime", "-t", "--notime", "-k", "--kernel", "-u",
+                              "--userspace", "-x", "--decode", "-r", "--raw", "-d",
+                              "--show-delta", "-e", "--reltime", "-L", "-P", "--nopager"),
+                  valued={"-l": _re(r"[a-z,+]+"), "--level": _re(r"[a-z,+]+"),
+                          "-f": _re(r"[a-z,]+"), "--facility": _re(r"[a-z,]+"),
+                          "--since": _any, "--until": _any, "--time-format": _word}),
+    "crontab": Argv(flags=_opts("-l"), valued={"-u": _word}, require=_opts("-l")),
+    "iptables": _IPTABLES,
+    "ip6tables": _IPTABLES,
+    "ip": _IP,
+    "systemctl": _SYSTEMCTL,
+    # --vacuum-*, --rotate, --flush, --sync, --cursor-file (пишет файл), -f (следит) — нет
+    "journalctl": Argv(
+        flags=_opts("--no-pager", "-r", "--reverse", "-k", "--dmesg", "-b", "--boot", "-x",
+                    "--catalog", "-e", "--pager-end", "-q", "--quiet", "-a", "--all", "-l",
+                    "--full", "--utc", "--system", "--no-hostname", "--no-tail",
+                    "--disk-usage", "--list-boots", "-m", "--merge"),
+        valued={"-n": _INT, "--lines": _INT, "-u": _word, "--unit": _word,
+                "--since": _any, "--until": _any, "-S": _any, "-U": _any,
+                "-p": _re(r"[a-z0-9.]+"), "--priority": _re(r"[a-z0-9.]+"),
+                "-o": _re(r"[a-z-]+"), "--output": _re(r"[a-z-]+"),
+                "-t": _word, "--identifier": _word, "-g": _any, "--grep": _any},
+        positional=_paths,  # совпадения FIELD=value
+    ),
+    "ufw": Argv(subcommands={
+        "status": Argv(positional=_upto(1, lambda p: p in ("verbose", "numbered"))),
+    }),
+    "fail2ban-client": Argv(subcommands={
+        "status": Argv(positional=_upto(1, _NAME)),
+        "ping": Argv(),
+        "get": Argv(positional=lambda ps: 1 <= len(ps) <= 2 and all(_NAME(p) for p in ps)),
+    }),
+    # только дамп/проверка конфига: без -T/-t sshd запустил бы демон, -E пишет лог
+    "sshd": Argv(flags=_opts("-T", "-t"), valued={"-C": _word, "-f": _word},
+                 require=_opts("-T", "-t")),
+    "apt": _APT,
+    "apt-get": _APT,
+    "certbot": Argv(subcommands={
+        "certificates": Argv(valued={"--cert-name": _word, "-d": _word, "--domains": _word}),
+    }),
+    # На ноде docker доступен только через ssh, сокета у нас там нет.
+    "docker": _DOCKER,
 }
 
 # Всё, что вообще может быть признано читающим. Скоуп скила — подмножество отсюда.
-KNOWN_BINARIES = _ALWAYS_SAFE | frozenset(_CHECKS)
+KNOWN_BINARIES = frozenset(_SPECS)
 
 
 def is_read_only(command: list[str], binaries: frozenset[str]) -> bool:
@@ -150,10 +525,8 @@ def is_read_only(command: list[str], binaries: frozenset[str]) -> bool:
     binary, args = command[0], command[1:]
     if binary not in binaries:
         return False
-    if binary in _ALWAYS_SAFE:
-        return True
-    check = _CHECKS.get(binary)
-    return check is not None and check(args)
+    spec = _SPECS.get(binary)
+    return spec is not None and _valid(spec, args)
 
 
 def refusal(command: list[str], binaries: frozenset[str], exec_tool: str = "shell_exec") -> dict:
