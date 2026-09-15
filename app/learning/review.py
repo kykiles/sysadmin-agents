@@ -64,7 +64,7 @@ async def run_review(ctx: LearningContext) -> ReviewOutcome:
         except Exception:
             log.exception("consolidate_failed")
     ctx.pending = {short_id(p["scope"], p["key"]): p for p in suggested}
-    return ReviewOutcome(stale=stale, tainted=ctx.facts.tainted()[:settings.lint_max_items],
+    return ReviewOutcome(stale=stale, tainted=ctx.facts.proposals()[:settings.lint_max_items],
                          suggested=suggested)
 
 
@@ -84,9 +84,12 @@ def render_review(outcome: ReviewOutcome) -> str:
             lines.append(f"> `{f.scope}/{f.key}` = {f.value} — не проверялось {f.age_days} дн.")
         blocks.append("\n".join(lines))
     if outcome.tainted:
-        lines = ["**Записано со слов недоверенного источника**", ""]
+        lines = ["**Ждёт проверки: записано со слов недоверенного источника**", ""]
         for f in outcome.tainted:
-            lines.append(f"> `{f['scope']}/{f['key']}` = {f['value']}")
+            line = f"> `{f['scope']}/{f['key']}` = {f['value']} (источник: {f['source']}"
+            if f["current"] is not None:
+                line += f"; заменит: {f['current']}"
+            lines.append(line + ")")
         blocks.append("\n".join(lines))
     if outcome.suggested:
         lines = ["**Предлагаю запомнить**", ""]

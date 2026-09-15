@@ -191,6 +191,65 @@ async def test_forget_fact_callback_owner(monkeypatch):
     learning.facts.forget.assert_called_once_with("infra", "k")
 
 
+# ---------- кнопки карантина памяти: одобряется ровно показанная версия (аудит F09) ----------
+
+def _quarantine(tmp_path):
+    from app.memory.facts import KnowledgeStore
+    learning = MagicMock()
+    learning.facts = KnowledgeStore(str(tmp_path / "f.db"))
+    learning.facts.remember("net", "asn", "AS100")
+    pid = learning.facts.propose("net", "asn", "AS666", run_id="r", tool="remember_fact",
+                                 source="spawn:search")
+    return learning, pid
+
+
+def _active(learning):
+    return learning.facts.recall(scope="net")[0]["value"]
+
+
+@pytest.mark.parametrize("caller", REFUSED)
+@pytest.mark.parametrize("choice", ["ok", "no"])
+async def test_proposal_callback_refused(caller, choice, tmp_path):
+    learning, pid = _quarantine(tmp_path)
+    await _press(_router(learning=learning), f"qf:{pid}:{choice}", **caller)
+    assert _active(learning) == "AS100"
+    assert [p["id"] for p in learning.facts.proposals()] == [pid]
+
+
+async def test_proposal_approved_by_owner_once(tmp_path):
+    learning, pid = _quarantine(tmp_path)
+    router = _router(learning=learning)
+    await _press(router, f"qf:{pid}:ok")
+    assert _active(learning) == "AS666"
+    again = await _press(router, f"qf:{pid}:ok")
+    assert "устарел" in again.answer.call_args.args[0]
+
+
+async def test_proposal_rejected_by_owner(tmp_path):
+    learning, pid = _quarantine(tmp_path)
+    await _press(_router(learning=learning), f"qf:{pid}:no")
+    assert _active(learning) == "AS100"
+    assert learning.facts.proposals() == []
+
+
+async def test_old_proposal_button_does_not_approve_update(tmp_path):
+    learning, old = _quarantine(tmp_path)
+    new = learning.facts.propose("net", "asn", "AS777", run_id="r2", tool="remember_fact",
+                                 source="spawn:search")
+    cb = await _press(_router(learning=learning), f"qf:{old}:ok")
+    assert "устарел" in cb.answer.call_args.args[0]
+    assert _active(learning) == "AS100"
+    assert [p["id"] for p in learning.facts.proposals()] == [new]
+
+
+@pytest.mark.parametrize("data", ["qf:{pid}", "qf:{pid}:ok:x", "qf:{pid}:yes", "qf:x{pid}:ok"])
+async def test_malformed_proposal_callback_changes_nothing(data, tmp_path):
+    learning, pid = _quarantine(tmp_path)
+    await _press(_router(learning=learning), data.format(pid=pid))
+    assert _active(learning) == "AS100"
+    assert len(learning.facts.proposals()) == 1
+
+
 def _msg(*, user=1, chat_type="private", chat_id=1):
     msg = MagicMock()
     msg.text = "проверь диск"

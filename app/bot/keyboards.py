@@ -5,11 +5,18 @@ def review_markup(outcome) -> InlineKeyboardMarkup:
     """Кнопки к сводке самопроверки."""
     from app.learning.review import short_id
 
-    facts = [(f.scope, f.key) for f in outcome.stale]
-    facts += [(f["scope"], f["key"]) for f in outcome.tainted if (f["scope"], f["key"]) not in facts]
     rows = [
-        [InlineKeyboardButton(text=f"Забыть: {s}/{k}"[:28], callback_data=f"lf:{short_id(s, k)}:del")]
-        for s, k in facts
+        [InlineKeyboardButton(text=f"Забыть: {f.scope}/{f.key}"[:28],
+                              callback_data=f"lf:{short_id(f.scope, f.key)}:del")]
+        for f in outcome.stale
+    ]
+    # Кнопка карантина несёт id версии предложения, а не ключ: обновлённое под тем
+    # же ключом предложение старой кнопкой не одобрить.
+    rows += [
+        [InlineKeyboardButton(text=f"Принять: {p['scope']}/{p['key']}"[:28],
+                              callback_data=f"qf:{p['id']}:ok"),
+         InlineKeyboardButton(text="Отклонить", callback_data=f"qf:{p['id']}:no")]
+        for p in outcome.tainted
     ]
     rows += [
         [InlineKeyboardButton(text=f"Записать: {f['scope']}/{f['key']}"[:28],

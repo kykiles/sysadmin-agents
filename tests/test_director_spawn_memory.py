@@ -214,25 +214,34 @@ async def test_spawned_agent_without_host_skills_gets_no_host_query(tmp_path):
     assert sub_tools == {"echo"}
 
 
-async def test_fact_written_after_an_untrusted_spawn_is_flagged(tmp_path):
-    """Недоверенный текст возвращается в контекст Директора: всё, что он запишет
-    в память по итогам такой задачи, должен увидеть человек."""
+async def test_fact_written_after_an_untrusted_spawn_goes_to_quarantine(tmp_path):
+    """Недоверенный текст возвращается в контекст Директора: что он запишет по итогам
+    такой задачи, в активную память не попадает до одобрения владельцем (аудит F09)."""
     facts.init_store(str(tmp_path / "f.db"))
+    store = facts.get_store()
+    store.remember("net", "asn", "AS100")
     lib = {"search": Skill(name="search", description="ищет в вебе",
                            instructions="## поиск", tools=[], untrusted=True)}
     llm = FakeLLM([
         _call("spawn", {"role": "х", "skills": ["search"], "task": "найди asn"}),
-        ChoiceMessage(content="AS123", tool_calls=None),                     # агент
-        _call("remember_fact", {"scope": "net", "key": "asn", "value": "AS123"}),
+        ChoiceMessage(content="AS666", tool_calls=None),                     # агент
+        # объявить факт проверенным модель не может: таких параметров нет
+        _call("remember_fact", {"scope": "net", "key": "asn", "value": "AS666",
+                                "verified": True, "tainted": False}),
         ChoiceMessage(content="готово", tool_calls=None),
     ])
     d = Director(llm=llm, skills=lib)
-    await d.handle(Task(content="узнай asn"))
+    await d.handle(Task(content="узнай asn", run_id="run-7"))
 
-    assert [f["key"] for f in facts.get_store().tainted()] == ["asn"]
+    (p,) = store.proposals()
+    assert (p["value"], p["run_id"], p["tool"], p["source"]) == (
+        "AS666", "run-7", "remember_fact", "spawn:search")
+    assert store.recall(scope="net")[0]["value"] == "AS100"
+    replies = [json.loads(m["content"]) for m in llm.seen[-1] if m.get("role") == "tool"]
+    assert "proposed" in replies[-1] and "remembered" not in replies[-1]
 
 
-async def test_fact_from_an_ordinary_task_is_not_flagged(tmp_path):
+async def test_fact_from_an_ordinary_task_is_active(tmp_path):
     facts.init_store(str(tmp_path / "f.db"))
     llm = FakeLLM([
         _call("remember_fact", {"scope": "net", "key": "asn", "value": "AS123"}),
@@ -241,7 +250,8 @@ async def test_fact_from_an_ordinary_task_is_not_flagged(tmp_path):
     d = Director(llm=llm, skills=_skill())
     await d.handle(Task(content="запомни"))
 
-    assert facts.get_store().tainted() == []
+    assert facts.get_store().proposals() == []
+    assert facts.get_store().recall(scope="net")[0]["value"] == "AS123"
 
 
 def test_memory_index_collapses_tail_when_budget_spent():

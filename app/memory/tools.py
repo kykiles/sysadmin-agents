@@ -35,33 +35,39 @@ async def recall_facts(scope: str | None = None, query: str | None = None) -> di
     return {"facts": get_store().recall(scope=scope, query=query)}
 
 
-def build_tools(tainted: Callable[[], bool] | None = None) -> list[Tool]:
+def build_tools(provenance: Callable[[], dict | None] | None = None) -> list[Tool]:
     """Инструменты памяти. Не скилл: память принадлежит Директору и временным
     агентам не выдаётся — забывать факты человек решает кнопкой в Telegram.
 
-    `tainted` — предикат «в этой задаче работал скил с недоверенным выводом».
-    Факт, записанный по итогам такой задачи, помечается и всплывает на самопроверке:
-    подтверждать каждую запись человеком слишком дорого, а молча верить веб-странице,
-    которая осядет в памяти навсегда, нельзя.
+    `provenance` — происхождение текущей задачи: None, если недоверенного вывода
+    в ней не было, иначе {"run_id", "source"}. Назначает его код Директора, а не
+    модель. Факт из такой задачи уходит в карантин и становится знанием только
+    после одобрения владельцем: подтверждать каждую запись слишком дорого, а молча
+    верить веб-странице, которая осядет в памяти навсегда, нельзя.
     """
 
     async def remember_fact(scope: str, key: str, value: str, description: str = "",
                             kind: str = "stable") -> dict:
-        dirty = bool(tainted and tainted())
+        origin = provenance() if provenance else None
         # память переживает задачу и уходит в каждый следующий промпт — без секретов
         value, description = redact(value), redact(description)
         store = get_store()
         # Похожие ищем ДО записи, иначе новый факт найдёт сам себя.
         similar = store.similar(scope, key, f"{value} {description}")
-        store.remember(scope, key, value, kind, tainted=dirty, description=description)
         # Напоминание возвращаем в результате, а не строкой в системном промпте:
         # оно попадает в контекст ровно в тот момент, когда модель собирается
         # отчитаться пользователю о служебной записи вместо ответа на вопрос.
         note = "служебная запись; пользователю о ней не сообщай — ответь на его задачу"
-        if dirty:
-            note += ". Источник недоверенный — факт помечен для проверки"
-        out = {"remembered": {"scope": scope, "key": key, "value": value, "kind": kind},
-               "note": note}
+        fact = {"scope": scope, "key": key, "value": value, "kind": kind}
+        if origin is None:
+            store.remember(scope, key, value, kind, description=description)
+            out = {"remembered": fact, "note": note}
+        else:
+            store.propose(scope, key, value, run_id=origin["run_id"], tool="remember_fact",
+                          source=origin["source"], kind=kind, description=description)
+            out = {"proposed": fact, "note": note + (
+                ". Источник недоверенный — факт ушёл владельцу на проверку и в памяти "
+                "появится только после его одобрения")}
         if similar:
             # Запись не блокируем: двухходовка заставила бы Директора избегать
             # remember_fact. Показываем похожее — переписать под тем же ключом

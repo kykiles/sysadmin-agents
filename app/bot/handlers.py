@@ -131,6 +131,21 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
             learning.facts.forget(*found)
         await callback.answer("Факт забыт" if found else "Факт не найден")
 
+    @router.callback_query(F.data.startswith("qf:"))
+    async def _resolve_proposal(callback: CallbackQuery):
+        parts = callback.data.split(":")
+        if learning is None or len(parts) != 3 or not parts[1].isdigit() or parts[2] not in ("ok", "no"):
+            await callback.answer("Кнопка устарела")
+            return
+        pid = int(parts[1])
+        if parts[2] == "ok":
+            done = learning.facts.approve(pid) is not None
+            label = "Принято в память"
+        else:
+            done = learning.facts.reject(pid)
+            label = "Отклонено"
+        await callback.answer(label if done else "Предложение устарело или уже решено")
+
     @router.message()
     async def _task(message: Message):
         task = Task(content=with_quote(message), chat_id=str(message.chat.id))

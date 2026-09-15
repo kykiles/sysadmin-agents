@@ -12,10 +12,6 @@ class KnowledgeStore(SqliteStore):
         "value TEXT NOT NULL, "
         "ts TEXT NOT NULL, "
         "kind TEXT NOT NULL DEFAULT 'stable', "
-        # Факт записан в задаче, где работал скил с недоверенным выводом (веб, чужой
-        # API). Инструкция, внедрённая в такой текст, осела бы в памяти навсегда —
-        # поэтому такие факты показываются человеку на самопроверке.
-        "tainted INTEGER NOT NULL DEFAULT 0, "
         # «Когда это пригодится» — по описанию факт попадает в задачу, формулировка
         # которой с ключом не совпадает. Пустое описание легально: старые факты
         # показываются одним ключом, как раньше.
@@ -26,27 +22,107 @@ class KnowledgeStore(SqliteStore):
         "hits INTEGER NOT NULL DEFAULT 0, "
         "last_used TEXT NOT NULL DEFAULT '', "
         "PRIMARY KEY (scope, key))",
+        # Карантин: факт, записанный в задаче, где работал скил с недоверенным выводом
+        # (веб, чужой API). Внедрённая в такой текст инструкция из активной памяти
+        # попала бы в каждый следующий промпт — поэтому до одобрения владельцем он
+        # лежит здесь и в оглавление, recall и консолидацию не попадает (аудит F09).
+        # id — версия предложения: новое значение под тем же ключом получает новый id,
+        # и старая кнопка его не одобрит. AUTOINCREMENT не даёт переиспользовать id
+        # удалённой последней строки.
+        "CREATE TABLE IF NOT EXISTS fact_proposals ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "scope TEXT NOT NULL, "
+        "key TEXT NOT NULL, "
+        "value TEXT NOT NULL, "
+        "kind TEXT NOT NULL, "
+        "description TEXT NOT NULL, "
+        # происхождение: задача, инструмент записи и недоверенный источник
+        "run_id TEXT NOT NULL, "
+        "tool TEXT NOT NULL, "
+        "source TEXT NOT NULL, "
+        "ts TEXT NOT NULL, "
+        "UNIQUE (scope, key))",
     )
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         self._add_column(conn, "facts", "kind", "TEXT NOT NULL DEFAULT 'stable'")
-        self._add_column(conn, "facts", "tainted", "INTEGER NOT NULL DEFAULT 0")
         self._add_column(conn, "facts", "description", "TEXT NOT NULL DEFAULT ''")
         self._add_column(conn, "facts", "hits", "INTEGER NOT NULL DEFAULT 0")
         self._add_column(conn, "facts", "last_used", "TEXT NOT NULL DEFAULT ''")
+        # До карантина недоверенные факты жили в facts с флагом tainted. Переносим
+        # их в предложения без потери текста и убираем колонку — второй запуск её
+        # не найдёт, так что повторная миграция ничего не делает.
+        if "tainted" in {r[1] for r in conn.execute("PRAGMA table_info(facts)")}:
+            conn.execute(
+                "INSERT INTO fact_proposals "
+                "(scope, key, value, kind, description, run_id, tool, source, ts) "
+                "SELECT scope, key, value, kind, description, '', 'remember_fact', "
+                "'помечен до карантина', ts FROM facts WHERE tainted = 1"
+            )
+            conn.execute("DELETE FROM facts WHERE tainted = 1")
+            conn.execute("ALTER TABLE facts DROP COLUMN tainted")
+
+    @staticmethod
+    def _upsert(conn: sqlite3.Connection, scope: str, key: str, value: str, kind: str,
+                description: str) -> None:
+        conn.execute(
+            "INSERT INTO facts (scope, key, value, ts, kind, description) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(scope, key) DO UPDATE SET "
+            "value = excluded.value, ts = excluded.ts, kind = excluded.kind, "
+            "description = excluded.description",
+            (scope, key, value, datetime.now(timezone.utc).isoformat(), kind, description),
+        )
 
     def remember(self, scope: str, key: str, value: str, kind: str = "stable",
-                 tainted: bool = False, description: str = "") -> None:
+                 description: str = "") -> None:
+        with self._connect() as conn:
+            self._upsert(conn, scope, key, value, kind, description)
+
+    def propose(self, scope: str, key: str, value: str, *, run_id: str, tool: str,
+                source: str, kind: str = "stable", description: str = "") -> int:
+        """Положить непроверенный факт в карантин. Активный факт под тем же ключом
+        не трогается до одобрения; прежнее предложение заменяется новой версией."""
         ts = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
-            conn.execute(
-                "INSERT INTO facts (scope, key, value, ts, kind, tainted, description) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(scope, key) DO UPDATE SET "
-                "value = excluded.value, ts = excluded.ts, kind = excluded.kind, "
-                "tainted = excluded.tainted, description = excluded.description",
-                (scope, key, value, ts, kind, int(tainted), description),
+            conn.execute("DELETE FROM fact_proposals WHERE scope = ? AND key = ?", (scope, key))
+            cur = conn.execute(
+                "INSERT INTO fact_proposals "
+                "(scope, key, value, kind, description, run_id, tool, source, ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (scope, key, value, kind, description, run_id, tool, source, ts),
             )
+            return cur.lastrowid
+
+    def proposals(self) -> list[dict]:
+        """Карантин на глаза владельцу; `current` — что одобрение заменит."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT p.id, p.scope, p.key, p.value, p.kind, p.description, p.run_id, "
+                "p.tool, p.source, p.ts, f.value FROM fact_proposals p "
+                "LEFT JOIN facts f ON f.scope = p.scope AND f.key = p.key ORDER BY p.id"
+            ).fetchall()
+        cols = ("id", "scope", "key", "value", "kind", "description", "run_id",
+                "tool", "source", "ts", "current")
+        return [dict(zip(cols, r)) for r in rows]
+
+    def approve(self, proposal_id: int) -> dict | None:
+        """Сделать активной ровно эту версию. Одноразово: предложение гасится в той
+        же транзакции, повторное или устаревшее одобрение вернёт None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "DELETE FROM fact_proposals WHERE id = ? "
+                "RETURNING scope, key, value, kind, description", (proposal_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            self._upsert(conn, *row)
+        return dict(zip(("scope", "key", "value", "kind", "description"), row))
+
+    def reject(self, proposal_id: int) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM fact_proposals WHERE id = ?", (proposal_id,))
+            return cur.rowcount > 0
 
     def recall(self, scope: str | None = None, query: str | None = None) -> list[dict]:
         sql = "SELECT scope, key, value, kind, description FROM facts"
@@ -132,14 +208,6 @@ class KnowledgeStore(SqliteStore):
             {"scope": s, "key": k, "value": v, "kind": kind, "ts": ts}
             for s, k, v, kind, ts in rows
         ]
-
-    def tainted(self) -> list[dict]:
-        """Факты, записанные в задачах с недоверенным выводом — на глаза человеку."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT scope, key, value FROM facts WHERE tainted = 1 ORDER BY ts"
-            ).fetchall()
-        return [{"scope": s, "key": k, "value": v} for s, k, v in rows]
 
     def forget(self, scope: str, key: str) -> None:
         with self._connect() as conn:

@@ -304,8 +304,8 @@ class Director(Agent):
                 gateway=gateway,
             )
             # Вывод такого агента вернётся в контекст Директора: всё, что он запишет
-            # в память по итогам этой задачи, помечаем как пришедшее из чужого текста.
-            self._untrusted_used = self._untrusted_used or any(s.untrusted for s in chosen)
+            # в память по итогам этой задачи, уходит в карантин (аудит F09).
+            self._untrusted_skills.update(s.name for s in chosen if s.untrusted)
             log.info("spawn", role=role, skills=skills)
             # Временный агент: не регистрируем в реестре, вызываем напрямую и забываем
             # вместе с контекстом. memory не передаём — истории у него быть не должно.
@@ -364,7 +364,7 @@ class Director(Agent):
         # Директору нужны только чтение и запись, забывать факты — не его дело.
         # Память принадлежит Директору: инструменты приходят из ядра, а не из
         # библиотеки скилов, поэтому выдать их спавнутому агенту нечем.
-        tools = [report_tool, *memory_tools(lambda: self._untrusted_used)]
+        tools = [report_tool, *memory_tools(self._provenance)]
         if library:
             tools.append(spawn_tool)
         if skills_dir is not None:
@@ -412,11 +412,18 @@ class Director(Agent):
         # параллельный handle их бы перемешал. Спавнутых агентов замок не касается —
         # они выполняются внутри одной задачи и параллелятся намеренно.
         self._lock = asyncio.Lock()
-        self._untrusted_used = False
+        self._untrusted_skills: set[str] = set()
         self._sub_trace: list[str] = []
         self._agents_used: list[str] = []
         self._report_path: str = ""
         self._run_id: str = ""
+
+    def _provenance(self) -> dict | None:
+        """Происхождение записей памяти в текущей задаче: None — недоверенного
+        вывода не было. Флаг на весь run консервативен; точнее — T09."""
+        if not self._untrusted_skills:
+            return None
+        return {"run_id": self._run_id, "source": "spawn:" + ",".join(sorted(self._untrusted_skills))}
 
     def reload_library(self, skills: dict) -> None:
         """Подхватить обновлённые навыки без рестарта процесса."""
@@ -431,7 +438,7 @@ class Director(Agent):
         async with self._lock:
             self._sub_trace = []
             self._agents_used = []
-            self._untrusted_used = False
+            self._untrusted_skills = set()
             self._report_path = ""
             self._run_id = task.run_id or task.id
             self.system_prompt = self._base_prompt + await asyncio.to_thread(_memory_index)
