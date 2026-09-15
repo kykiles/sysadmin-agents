@@ -25,6 +25,12 @@ async def main() -> None:
         base_url=settings.llm_base_url,
         model=settings.llm_model,
     )
+    # Временные агенты, монитор и консолидация остаются на LLM_MODEL.
+    director_llm = LLMClient(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        model=settings.director_llm_model,
+    ) if settings.director_llm_model else llm
     # Библиотека скилов лежит рядом с пакетом, а не внутри него: ядро не знает,
     # из какой предметной области будут задачи.
     skills_dir = Path(__file__).resolve().parent.parent / "skills"
@@ -45,8 +51,8 @@ async def main() -> None:
     ) if journal is not None else None
     bot = create_bot()
     gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)
-    director = Director(llm=llm, gateway=gateway, memory=history, journal=journal,
-                        skills=skills, skills_dir=skills_dir)
+    director = Director(llm=director_llm, agent_llm=llm, gateway=gateway, memory=history,
+                        journal=journal, skills=skills, skills_dir=skills_dir)
 
     def reload_library() -> str:
         """Перечитать skills/ без рестарта. Новые скиллы подхватываются сразу;
@@ -69,7 +75,8 @@ async def main() -> None:
                         config_from_settings(), learning)
         )
 
-    log.info("startup", model=settings.llm_model, skills=sorted(skills),
+    log.info("startup", model=settings.llm_model,
+             director_model=settings.director_llm_model or settings.llm_model, skills=sorted(skills),
              monitor=settings.monitor_enabled)
     try:
         await dp.start_polling(bot)

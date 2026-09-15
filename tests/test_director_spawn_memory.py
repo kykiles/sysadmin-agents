@@ -62,6 +62,24 @@ async def test_spawn_runs_temporary_agent(tmp_path):
     assert "## Навык: письмо" in llm.seen[1][0]["content"]
 
 
+async def test_spawned_agent_runs_on_agent_llm(tmp_path):
+    """Директор и временные агенты могут сидеть на разных моделях."""
+    facts.init_store(str(tmp_path / "f.db"))
+    director_llm = FakeLLM([
+        _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши"}),
+        ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    agent_llm = FakeLLM([ChoiceMessage(content="написал", tool_calls=None)])
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill())
+    res = await d.handle(Task(content="пост"))
+
+    assert res.content == "Готово."
+    assert len(director_llm.seen) == 2
+    assert all(m[0]["content"].startswith("Ты — Директор") for m in director_llm.seen)
+    (sub,) = agent_llm.seen
+    assert "## Навык: письмо" in sub[0]["content"]
+
+
 async def test_spawn_dedupes_tools_shared_by_skills(tmp_path):
     facts.init_store(str(tmp_path / "f.db"))
     # Два навыка с одноимённым инструментом: шлюз на дубль имени отвечает 400.

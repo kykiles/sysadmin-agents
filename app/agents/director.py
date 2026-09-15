@@ -243,7 +243,10 @@ def _summary(content: str) -> str:
 class Director(Agent):
     def __init__(self, llm: LLMClient, gateway=None,
                  memory=None, journal=None, skills: dict | None = None,
-                 skills_dir: Path | None = None):
+                 skills_dir: Path | None = None, agent_llm: LLMClient | None = None):
+        # Модель временных агентов; без неё они работают на модели Директора.
+        agent_llm = agent_llm or llm
+
         async def _make_report(title: str, markdown: str) -> dict:
             path = await asyncio.to_thread(
                 save_report, settings.reports_dir, redact(title), redact(markdown)
@@ -300,7 +303,7 @@ class Director(Agent):
                 name=f"spawned:{'+'.join(skills)}",
                 system_prompt=compose_prompt(role, chosen),
                 tools=list(uniq.values()),
-                llm=llm,
+                llm=agent_llm,
                 gateway=gateway,
             )
             # Вывод такого агента вернётся в контекст Директора: всё, что он запишет

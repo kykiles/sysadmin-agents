@@ -60,6 +60,7 @@ cp .env.example .env
 |---|---|---|
 | `LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI-совместимый endpoint (сейчас в бою — `https://openrouter.ai/api/v1`) |
 | `LLM_MODEL` | `deepseek-chat` | ID модели (сейчас в бою — `deepseek/deepseek-v4-flash-0731`) |
+| `DIRECTOR_LLM_MODEL` | пусто (= `LLM_MODEL`) | Модель Директора, если она отличается от модели временных агентов, монитора и консолидации (сейчас в бою — `openai/gpt-5.6-luna`) |
 | `COMPOSE_PROJECTS_DIR` | `/opt` | Директория с compose-проектами |
 | `AGENT_MAX_ITERATIONS` | `25` | Лимит итераций LLM↔tools |
 | `TOOL_OUTPUT_MAX_CHARS` | `8000` | Бюджет вывода одного инструмента в контексте; `0` — без обрезки |

@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     llm_api_key: str = Field(alias="LLM_API_KEY")
     llm_base_url: str = Field(default="https://api.deepseek.com", alias="LLM_BASE_URL")
     llm_model: str = Field(default="deepseek-chat", alias="LLM_MODEL")
+    # Директор делает мало ходов, но от него зависит, как разложена задача, а временные
+    # агенты гоняют длинные циклы с инструментами — модели им нужны разные по цене.
+    # Пусто — Директор на LLM_MODEL, как все.
+    director_llm_model: str = Field(default="", alias="DIRECTOR_LLM_MODEL")
 
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
     telegram_user_id: int = Field(alias="TELEGRAM_USER_ID")
