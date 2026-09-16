@@ -133,7 +133,7 @@ async def test_buttons_carry_only_request_id():
     task, rid = await _start(gw)
     markup = bot.send_message.call_args.kwargs["reply_markup"]
     data = [b.callback_data for row in markup.inline_keyboard for b in row]
-    assert data == [f"cf:{rid}:yes", f"cf:{rid}:no"]
+    assert data == [f"cf:{rid}:yes", f"cf:{rid}:all", f"cf:{rid}:no"]
     assert rid in bot.send_message.call_args.args[1]
     await _stop(task)
 
@@ -164,3 +164,67 @@ async def test_undelivered_file_means_no_buttons_and_rejection():
     assert out is Decision.REJECTED
     bot.send_message.assert_not_called()
     assert gw._pending == {}
+
+
+# ---------- «Yes to all»: тот же инструмент и цель, до конца ответа ----------
+
+def _run_req(run="r1", tool="docker_query", **args):
+    return ConfirmationRequest(run_id=run, agent_id="a#1", tool_call_id="c1", tool_name=tool,
+                               args=args or {"container": "pg", "command": ["psql", "-c", "SELECT 1"]})
+
+
+async def test_yes_to_all_approves_same_scope_without_asking():
+    bot = _bot()
+    gw = TelegramConfirmationGateway(bot, chat_id=OWNER, timeout=5)
+    task, rid = await _start(gw, _run_req())
+    assert _owner(gw, rid, Decision.APPROVED_ALL)
+    assert await task is Decision.APPROVED_ALL
+    other_query = _run_req(container="pg", command=["psql", "-c", "SELECT 2"])
+    assert await gw.request(other_query) is Decision.AUTO_APPROVED
+    assert bot.send_message.await_count == 1
+    assert "container=pg, program=psql" in bot.send_message.call_args.args[1]
+
+
+@pytest.mark.parametrize("other", [
+    _run_req(container="other", command=["psql", "-c", "SELECT 1"]),
+    _run_req(container="pg", command=["mysql", "-e", "SELECT 1"]),
+    _run_req(tool="docker_exec", container="pg", command=["psql", "-c", "SELECT 1"]),
+    _run_req(run="r2"),
+])
+async def test_yes_to_all_does_not_cover_other_target_program_tool_or_run(other):
+    gw = TelegramConfirmationGateway(_bot(), chat_id=OWNER, timeout=5)
+    task, rid = await _start(gw, _run_req())
+    assert _owner(gw, rid, Decision.APPROVED_ALL)
+    await task
+    second, _ = await _start(gw, other)
+    assert not second.done()
+    await _stop(second)
+
+
+async def test_release_ends_yes_to_all():
+    gw = TelegramConfirmationGateway(_bot(), chat_id=OWNER, timeout=5)
+    task, rid = await _start(gw, _run_req())
+    assert _owner(gw, rid, Decision.APPROVED_ALL)
+    await task
+    gw.release("r1")
+    second, _ = await _start(gw, _run_req())
+    assert not second.done()
+    await _stop(second)
+
+
+@pytest.mark.parametrize("req", [
+    _run_req(tool="write_skill", name="x", description="d", instructions="i"),
+    _run_req(tool="docker_exec", container="pg", command=["sh", "-c", "rm -rf /data"]),
+    _run_req(tool="shell_exec", command=["/usr/bin/bash", "-lc", "id"]),
+])
+async def test_no_yes_to_all_without_recognisable_scope(req):
+    bot = _bot()
+    gw = TelegramConfirmationGateway(bot, chat_id=OWNER, timeout=5)
+    task, rid = await _start(gw, req)
+    markup = bot.send_message.call_args.kwargs["reply_markup"]
+    assert [b.callback_data for row in markup.inline_keyboard for b in row] == [
+        f"cf:{rid}:yes", f"cf:{rid}:no"]
+    assert not _owner(gw, rid, Decision.APPROVED_ALL)
+    assert not task.done()
+    assert gw._grants == {}
+    await _stop(task)

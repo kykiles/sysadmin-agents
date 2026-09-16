@@ -107,6 +107,63 @@ async def test_dangerous_action_is_audited(tmp_path, monkeypatch):
     assert rec["result"]["returncode"] == 0
 
 
+async def test_auto_approved_call_runs_and_is_audited_as_such(tmp_path, monkeypatch):
+    from app import audit
+
+    path = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(audit.settings, "audit_trail_path", str(path))
+
+    class Q(BaseModel):
+        c: str
+
+    ran = []
+
+    async def _danger(c: str) -> dict:
+        ran.append(c)
+        return {"returncode": 0}
+
+    dt = Tool(name="restart", description="d", params_model=Q, fn=_danger, safety=Safety.DANGEROUS)
+
+    class GrantedGateway:
+        async def request(self, req: ConfirmationRequest) -> Decision:
+            return Decision.AUTO_APPROVED
+
+    tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"c": "bot"})))])
+    agent = Agent(name="t", system_prompt="sys", tools=[dt],
+                  llm=FakeLLM([tc, ChoiceMessage(content="ok", tool_calls=None)]), gateway=GrantedGateway())
+    await agent.handle(Task(content="restart bot"))
+    assert ran == ["bot"]
+    assert json.loads(path.read_text(encoding="utf-8"))["decision"] == "auto-approved"
+
+
+async def test_failed_precheck_never_reaches_confirmation():
+    class Q(BaseModel):
+        container: str
+
+    ran, asked = [], []
+
+    async def _danger(container: str) -> dict:
+        ran.append(container)
+        return {}
+
+    async def _missing(args: dict) -> str | None:
+        return f"контейнер {args['container']} не найден"
+
+    dt = Tool(name="restart", description="d", params_model=Q, fn=_danger,
+              safety=Safety.DANGEROUS, precheck=_missing)
+
+    class SpyGateway:
+        async def request(self, req: ConfirmationRequest) -> Decision:
+            asked.append(req)
+            return Decision.APPROVED
+
+    tc = ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(name="restart", arguments=json.dumps({"container": "nope"})))])
+    llm = FakeLLM([tc, ChoiceMessage(content="нет такого", tool_calls=None)])
+    agent = Agent(name="t", system_prompt="sys", tools=[dt], llm=llm, gateway=SpyGateway())
+    await agent.handle(Task(content="restart nope"))
+    assert asked == [] and ran == []
+
+
 # ---------- подтверждается и исполняется один снимок (аудит F04/F05) ----------
 
 class HostCmd(BaseModel):

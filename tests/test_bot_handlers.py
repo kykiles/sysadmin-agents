@@ -26,6 +26,13 @@ def test_keyboard_has_only_yes_and_no_for_one_request():
     assert all_cbs == ["cf:r1:yes", "cf:r1:no"]
 
 
+def test_keyboard_offers_yes_to_all_only_when_asked():
+    from app.bot.keyboards import approve_keyboard
+    kb = approve_keyboard("r1", with_all=True)
+    assert [b.callback_data for row in kb.inline_keyboard for b in row] == [
+        "cf:r1:yes", "cf:r1:all", "cf:r1:no"]
+
+
 def test_build_router_accepts_memory():
     from app.bot.handlers import build_router
 
@@ -136,7 +143,7 @@ async def _press(router, data, **caller):
 
 
 @pytest.mark.parametrize("caller", REFUSED)
-@pytest.mark.parametrize("choice", ["yes", "no"])
+@pytest.mark.parametrize("choice", ["yes", "all", "no"])
 async def test_confirm_callback_refused(caller, choice):
     gw = _gateway()
     task, rid = await _pending(gw)
@@ -151,6 +158,15 @@ async def test_confirm_callback_owner_in_private_chat():
     task, rid = await _pending(gw)
     await _press(_router(gateway=gw), f"cf:{rid}:yes")
     assert await task is Decision.APPROVED
+
+
+async def test_yes_to_all_callback_grants_scope():
+    gw = _gateway()
+    task, rid = await _pending(gw)
+    cb = await _press(_router(gateway=gw), f"cf:{rid}:all")
+    assert await task is Decision.APPROVED_ALL
+    assert "Yes to all" in cb.message.edit_text.call_args.args[0]
+    assert gw._grants == {"r1": {"docker_restart: container=bot"}}
 
 
 def _learning():
@@ -309,7 +325,7 @@ async def test_button_of_other_message_resolves_nothing():
     await _stop(task)
 
 
-@pytest.mark.parametrize("data", ["cf:{rid}:all", "cf:{rid}", "cf:{rid}:yes:x"])
+@pytest.mark.parametrize("data", ["cf:{rid}:always", "cf:{rid}", "cf:{rid}:yes:x"])
 async def test_old_or_malformed_callback_refused(data):
     gw = _gateway()
     task, rid = await _pending(gw)

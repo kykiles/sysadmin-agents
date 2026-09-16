@@ -94,6 +94,10 @@ class Agent:
         except ValidationError as e:
             return json.dumps({"error": e.errors(include_url=False, include_context=False)},
                               ensure_ascii=False)
+        if tool.precheck is not None and (problem := await tool.precheck(prepared)):
+            out = json.dumps({"error": problem}, ensure_ascii=False)
+            log.info("tool_call", agent=self.name, tool=tool.name, result_preview=redact(out)[:200])
+            return out
         req = ConfirmationRequest(
             run_id=task.run_id or task.id,
             agent_id=self.agent_id,
@@ -108,7 +112,7 @@ class Agent:
             await self._gateway.request(req) if self._gateway is not None
             else Decision.REJECTED
         )
-        if decision is Decision.APPROVED:
+        if decision.approved:
             out = await tool.invoke(prepared)
         else:
             out = json.dumps({"error": "not approved: rejected, timed out or not delivered"})

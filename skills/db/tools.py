@@ -10,7 +10,7 @@ DANGEROUS — каждый вызов подтверждает человек, �
 import re
 
 from app.tools.base import Tool, Safety
-from app.tools.docker import docker_exec, ExecParams
+from app.tools.docker import docker_exec, container_missing, ExecParams
 
 _CLIENTS = {"psql", "mysql", "mariadb", "sqlite3"}
 
@@ -93,5 +93,5 @@ async def docker_query(container: str, command: list[str]) -> dict:
 
 def build_tools() -> list[Tool]:
     return [
-        Tool("docker_query", "Run a database query inside a container via its client (psql, mysql, sqlite3; query passed via -c/-e). Refuses obvious writes, DDL and shell escapes, but that filter is NOT a read-only guarantee, so EVERY call requires user confirmation — gather what you need in one or two queries. For data changes use docker_exec.", ExecParams, docker_query, Safety.DANGEROUS),
+        Tool("docker_query", "Run a database query inside a container via its client (psql, mysql, sqlite3; query passed via -c/-e). Refuses obvious writes, DDL and shell escapes, but that filter is NOT a read-only guarantee, so EVERY call requires user confirmation — gather what you need in one or two queries. For data changes use docker_exec.", ExecParams, docker_query, Safety.DANGEROUS, precheck=container_missing),
     ]

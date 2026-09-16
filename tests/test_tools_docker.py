@@ -121,3 +121,28 @@ async def test_compose_up_runs_subprocess(monkeypatch):
     assert out["returncode"] == 0
     args = m.call_args.args
     assert "up" in args and "-d" in args
+
+
+def _docker_with_show(show):
+    c = MagicMock()
+    c.show = show
+    fake = MagicMock()
+    fake.containers = MagicMock()
+    fake.containers.container = MagicMock(return_value=c)
+    fake.__aenter__ = AsyncMock(return_value=fake)
+    fake.__aexit__ = AsyncMock(return_value=None)
+    return fake
+
+
+async def test_container_missing_reports_404_only():
+    from aiodocker import DockerError
+
+    missing = _docker_with_show(AsyncMock(side_effect=DockerError(404, {"message": "No such container"})))
+    with patch("app.tools.docker.Docker", return_value=missing):
+        assert "не найден" in await dk.container_missing({"container": "remna_pg_1"})
+    present = _docker_with_show(AsyncMock(return_value={"Id": "abc"}))
+    with patch("app.tools.docker.Docker", return_value=present):
+        assert await dk.container_missing({"container": "glowshine_postgres"}) is None
+    broken = _docker_with_show(AsyncMock(side_effect=DockerError(500, {"message": "daemon"})))
+    with patch("app.tools.docker.Docker", return_value=broken):
+        assert await dk.container_missing({"container": "x"}) is None

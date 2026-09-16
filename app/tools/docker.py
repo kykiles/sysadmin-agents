@@ -2,7 +2,7 @@ import asyncio
 import os
 from typing import Any
 from pydantic import BaseModel, Field
-from aiodocker import Docker
+from aiodocker import Docker, DockerError
 from app.config import settings
 
 
@@ -104,6 +104,18 @@ async def docker_inspect(container: str) -> dict:
 
 
 # ---------- dangerous docker api ----------
+
+async def container_missing(args: dict) -> str | None:
+    """precheck опасных вызовов в контейнере: нет контейнера — нечего и подтверждать.
+    Другие сбои Docker не решают за человека — запрос уйдёт как обычно."""
+    async with Docker() as docker:
+        try:
+            await docker.containers.container(args["container"]).show()
+        except DockerError as e:
+            if e.status == 404:
+                return f"контейнер {args['container']} не найден — имена даёт docker_ps"
+    return None
+
 
 async def docker_restart(container: str) -> dict:
     async with Docker() as docker:

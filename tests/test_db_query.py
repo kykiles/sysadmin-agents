@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock
+
 import pytest
 
 from skills.db.tools import _is_read_only, docker_query, build_tools
@@ -130,6 +132,7 @@ async def _dispatch(monkeypatch, tmp_path, command, gateway) -> list:
         return {"container": container, "output": "1", "exit_code": 0}
 
     monkeypatch.setattr(dt, "docker_exec", fake_docker_exec)
+    monkeypatch.setattr(dt, "container_missing", AsyncMock(return_value=None))
     monkeypatch.setattr(audit.settings, "audit_trail_path", str(tmp_path / "audit.jsonl"))
     args = json.dumps({"container": "pg", "command": command, "_intent": "Посмотрю данные."})
     llm = _LLM([

@@ -130,5 +130,7 @@ def format_confirmation(req: ConfirmationRequest, request_id: str, details: str,
         lines.append(f"Полный запрос ({len(details)} символов) — в файле выше; исполнен будет ровно он.")
     else:
         lines.append(f"<blockquote expandable>{html.escape(details)}</blockquote>")
+    if scope := req.scope():
+        lines.append(f"Yes to all — без вопросов до конца этого ответа: <code>{html.escape(redact(scope))}</code>")
     lines.append(f"Запрос: <code>{request_id}</code>")
     return "\n\n".join(lines)

@@ -40,6 +40,9 @@ class Tool:
     # Что на самом деле вызывается у MCP: (server_id, имя метода на сервере).
     # Отдельно от name — отображаемое имя может совпасть у двух серверов.
     remote: tuple[str, str] | None = None
+    # Проверка до подтверждения: строка — причина отказа. Спрашивать человека про
+    # вызов, который заведомо упадёт (контейнера нет), — значит учить его жать не читая.
+    precheck: Callable[[dict], Awaitable[str | None]] | None = None
 
     def schema(self) -> dict:
         parameters = self.params_schema or self.params_model.model_json_schema()

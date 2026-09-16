@@ -376,6 +376,26 @@ async def test_two_specialists_get_separate_confirmations(tmp_path):
     assert gw._pending == {}
 
 
+async def test_yes_to_all_covers_run_children_and_ends_with_answer(tmp_path):
+    from app.agents.messages import Decision
+
+    facts.init_store(str(tmp_path / "f.db"))
+    executed: list[str] = []
+    gw, bot, _requests = _telegram_gateway()
+    d = Director(llm=RoutingLLM(), gateway=gw, skills=_ops_library(executed))
+    root = Task(content="перезапусти обе ноды")
+    gw._grants[root.id] = {"restart: host=node-a"}
+    run = asyncio.create_task(d.handle(root))
+    await _wait_pending(gw, 1)
+    (rid, pending), = gw._pending.items()
+    assert gw.resolve(rid, Decision.REJECTED, user_id=1, chat_id=1, message_id=pending.message_id)
+    await run
+
+    assert executed == ["node-a"]
+    assert bot.send_message.await_count == 1
+    assert gw._grants == {}
+
+
 async def test_parent_cancel_clears_child_pending(tmp_path):
     from app.agents.messages import Decision
 

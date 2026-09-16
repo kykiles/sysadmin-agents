@@ -445,7 +445,12 @@ class Director(Agent):
             self._report_path = ""
             self._run_id = task.run_id or task.id
             self.system_prompt = self._base_prompt + await asyncio.to_thread(_memory_index)
-            result = await super().handle(task)
+            try:
+                result = await super().handle(task)
+            finally:
+                # «Yes to all» живёт до конца ответа — и при ошибке, и при отмене.
+                if self._gateway is not None:
+                    self._gateway.release(self._run_id)
             result.attachment = self._report_path
             if self._journal is not None:
                 await self._write_journal(task, result)

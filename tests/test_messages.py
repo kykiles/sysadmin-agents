@@ -19,9 +19,14 @@ def test_decision_values_match_audit_strings():
     assert isinstance(Decision.APPROVED, str)
 
 
-def test_no_scoped_auto_approval():
-    """«Не спрашивать снова» убрано: каждое изменение согласуется отдельно (аудит F04)."""
-    assert {d.value for d in Decision} == {"approved", "rejected"}
+def test_only_rejection_is_not_approval():
+    assert [d for d in Decision if not d.approved] == [Decision.REJECTED]
+
+
+def test_scope_names_tool_target_and_program():
+    req = ConfirmationRequest(run_id="r", agent_id="a", tool_call_id="c", tool_name="ssh_exec",
+                              args={"host": "node-a", "command": ["systemctl", "restart", "x"]})
+    assert req.scope() == "ssh_exec: host=node-a, program=systemctl"
 
 
 def test_confirmation_request_ids_are_separate():

@@ -172,12 +172,13 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
     @router.callback_query(F.data.startswith("cf:"))
     async def _confirm(callback: CallbackQuery):
         parts = callback.data.split(":")
-        # Старые форматы (cf:<task_id>:all) и чужие варианты ничего не решают.
-        if len(parts) != 3 or parts[2] not in ("yes", "no"):
+        # Чужие варианты ничего не решают; старая cf:<task_id>:all не найдёт запроса.
+        choices = {"yes": Decision.APPROVED, "all": Decision.APPROVED_ALL, "no": Decision.REJECTED}
+        if len(parts) != 3 or parts[2] not in choices:
             await callback.answer("Кнопка устарела")
             return
         _, request_id, choice = parts
-        decision = Decision.APPROVED if choice == "yes" else Decision.REJECTED
+        decision = choices[choice]
         resolved = gateway is not None and gateway.resolve(
             request_id, decision, user_id=callback.from_user.id,
             chat_id=callback.message.chat.id, message_id=callback.message.message_id,
@@ -185,7 +186,7 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         if not resolved:
             await callback.answer("Запрос устарел или уже решён — ничего не выполнено")
             return
-        label = "Yes" if choice == "yes" else "No"
+        label = {"yes": "Yes", "all": "Yes to all", "no": "No"}[choice]
         await callback.answer(label)
         # Запрос уже погашен: не удалось убрать кнопки — повторное нажатие всё равно
         # ничего не решит. html_text сохраняет разметку исходного сообщения.
