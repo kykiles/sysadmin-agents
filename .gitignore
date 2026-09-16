@@ -11,15 +11,11 @@ build/
 audit/
 AGENTS.md
 PROJECT.md
+CONTEXT.md
 CLAUDE.md
 docs/
 .claude/
 
-# личная постановка задачи, не версионируется
-TASK.md
-
-# аудит 2026-09-12 и план по нему — локальные, не версионируются
-AUDIT_2026-09-12.md
+# оставшиеся задачи по аудиту 2026-09-12 — локальные, не версионируются
 IMPLEMENTATION_PLAN_2026-09-12.md
-audit_artifacts/
 .agents/
