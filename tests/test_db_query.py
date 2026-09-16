@@ -62,8 +62,7 @@ async def test_docker_query_runs_via_docker_exec(monkeypatch):
 
 def test_tool_requires_confirmation():
     """Фильтр не доказывает read-only (аудит 2026-09-12, F03) — вызов подтверждает человек."""
-    (tool,) = build_tools()
-    assert tool.name == "docker_query"
+    tool = {t.name: t for t in build_tools()}["docker_query"]
     assert tool.safety is Safety.DANGEROUS
 
 
@@ -72,7 +71,8 @@ def test_loaded_skill_sees_dangerous():
     from app.skills.loader import load_skill
 
     skill = load_skill(Path("skills/db"))
-    assert {t.name: t.safety for t in skill.tools} == {"docker_query": Safety.DANGEROUS}
+    assert {t.name: t.safety for t in skill.tools} == {
+        "docker_query": Safety.DANGEROUS, "pg_read": Safety.SAFE, "docker_ps": Safety.SAFE}
 
 
 def test_psql_list_databases_allowed():
@@ -164,3 +164,69 @@ async def test_plain_select_asks_then_runs_once(monkeypatch, tmp_path):
     assert await _dispatch(monkeypatch, tmp_path, SELECT, gateway=gw) == [SELECT]
     assert len(gw.requests) == 1
     assert gw.requests[0].args["command"] == SELECT
+
+
+# ---------- pg_read: автоматическое чтение под ролью agent_ro (T17) ----------
+# Поведение psql и роли проверено на postgres:16: запись, второй statement,
+# COPY TO PROGRAM, pg_authid, conninfo в -d и суперпользователь agent_ro — отказ.
+
+from skills.db.tools import _pg_read_argv, pg_read
+
+
+def test_pg_read_is_safe_and_db_skill_can_list_containers():
+    tools = {t.name: t for t in build_tools()}
+    assert tools["pg_read"].safety is Safety.SAFE
+    assert tools["docker_ps"].safety is Safety.SAFE
+
+
+def test_pg_read_argv_runs_one_statement_as_agent_ro_in_read_only_transaction():
+    argv = _pg_read_argv("glowshine", "SELECT count(*) FROM referrals;")
+    assert argv[:9] == ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-U", "agent_ro", "-d", "glowshine"]
+    commands = [argv[i + 1] for i, a in enumerate(argv) if a == "-c"]
+    assert commands[-3:] == ["BEGIN TRANSACTION READ ONLY", "SELECT count(*) FROM referrals", "ROLLBACK"]
+    assert "rolsuper" in commands[0]
+
+
+@pytest.mark.parametrize("query", ["\\l", "\\dt", "\\dn", "\\dv", "\\d referrals", "\\d+ public.users"])
+def test_pg_read_accepts_describe_meta_commands(query):
+    assert isinstance(_pg_read_argv("db", query), list)
+
+
+@pytest.mark.parametrize("query", [
+    "SELECT 1; UPDATE users SET admin = true",
+    "SET transaction_read_only = off; DELETE FROM users",
+    "\\! id",
+    "\\i /tmp/x.sql",
+    "\\dt\n\\! id",
+    "\\d users \\! id",
+    "\\copy users to '/tmp/x'",
+    "   ",
+])
+def test_pg_read_refuses_second_statement_and_other_meta_commands(query):
+    assert isinstance(_pg_read_argv("db", query), str)
+
+
+@pytest.mark.parametrize("database", ["dbname=app user=postgres", "postgresql://postgres@/app", "app db", "-h", ""])
+def test_pg_read_database_is_a_bare_name(database):
+    assert isinstance(_pg_read_argv(database, "SELECT 1"), str)
+
+
+async def test_pg_read_refusal_never_execs(monkeypatch):
+    import skills.db.tools as dt
+
+    exec_ = AsyncMock()
+    monkeypatch.setattr(dt, "docker_exec", exec_)
+    out = await pg_read("pg", "SELECT 1; DROP TABLE users", "app")
+    assert "error" in out
+    exec_.assert_not_called()
+
+
+async def test_pg_read_hints_when_role_is_not_set_up(monkeypatch):
+    import skills.db.tools as dt
+
+    monkeypatch.setattr(dt, "docker_exec", AsyncMock(return_value={
+        "container": "pg", "command": ["psql"], "exit_code": 2,
+        "output": 'psql: error: FATAL:  role "agent_ro" does not exist'}))
+    out = await pg_read("pg", "SELECT 1", "app")
+    assert "agent_ro.sql" in out["hint"]
+    assert out["command"] == ["pg_read", "app", "SELECT 1"]

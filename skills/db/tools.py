@@ -4,13 +4,20 @@
 фильтр ниже не доказывает read-only: он пропускал `--command=`, `\\i файл`,
 `sqlite3 -cmd` и изменяющий PRAGMA (аудит 2026-09-12, F03). Поэтому инструмент
 DANGEROUS — каждый вызов подтверждает человек, — а фильтр остался дополнительным
-отказом для явно изменяющих форм. Автоматическое чтение вернёт структурированный
-интерфейс с ограниченной ролью БД, а не очередное правило в этом фильтре.
+отказом для явно изменяющих форм.
+
+Автоматическое чтение — `pg_read` (T17): argv собирает код, запрос идёт под ролью
+`agent_ro` без прав записи (agent_ro.sql) в транзакции READ ONLY. Гарантию даёт
+база, а текст проверяется лишь на то, что без проверки её обходит: второй
+statement (`;` выводит из транзакции), метакоманду psql и conninfo вместо имени БД
+(`-d "user=postgres"` подключает суперпользователем). Всё проверено на postgres:16.
 """
 import re
 
+from pydantic import BaseModel, Field
+
 from app.tools.base import Tool, Safety
-from app.tools.docker import docker_exec, container_missing, ExecParams
+from app.tools.docker import docker_exec, docker_ps, container_missing, ExecParams, NoParams
 
 _CLIENTS = {"psql", "mysql", "mariadb", "sqlite3"}
 
@@ -91,7 +98,66 @@ async def docker_query(container: str, command: list[str]) -> dict:
     return await docker_exec(container, command)
 
 
+class PgReadParams(BaseModel):
+    container: str = Field(description="имя контейнера PostgreSQL (см. docker_ps)")
+    database: str = Field(default="postgres", description="имя базы; список — запрос \\l")
+    query: str = Field(description="ОДИН запрос без ';' внутри (SELECT/WITH/EXPLAIN) "
+                                   "или одна из метакоманд: \\l, \\dt, \\dn, \\dv, \\d <таблица>")
+
+
+_PG_ROLE = "agent_ro"
+_DB_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}")
+# Метакоманды psql, которые только описывают схему; аргумент — одно имя объекта.
+_PG_DESCRIBE = re.compile(r"\\(l|dt|dn|dv|d\+?)( +[A-Za-z0-9_.]+)?")
+# Роль с такими правами обходит READ ONLY (COPY TO PROGRAM не пишет в базу) — отказ.
+_PG_GUARD = (
+    "DO $$BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user AND (rolsuper"
+    " OR pg_has_role(current_user, 'pg_execute_server_program', 'USAGE')"
+    " OR pg_has_role(current_user, 'pg_write_server_files', 'USAGE')"
+    " OR pg_has_role(current_user, 'pg_write_all_data', 'USAGE')))"
+    " THEN RAISE EXCEPTION 'роль agent_ro имеет права записи — чтение отключено'; END IF; END$$"
+)
+
+
+def _pg_read_argv(database: str, query: str) -> list[str] | str:
+    """argv для psql или причина отказа."""
+    if not _DB_NAME.fullmatch(database):
+        return "database — только имя базы (буквы, цифры, _ . -), без параметров подключения"
+    q = query.strip().rstrip(";").strip()
+    if not q:
+        return "пустой запрос"
+    if q.startswith("\\"):
+        if not _PG_DESCRIBE.fullmatch(q):
+            return "из метакоманд доступны только \\l, \\dt, \\dn, \\dv, \\d <таблица>"
+    elif ";" in q:
+        return "один запрос за вызов: ';' внутри запроса не принимается — сделай несколько вызовов"
+    return [
+        "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-U", _PG_ROLE, "-d", database,
+        "-c", _PG_GUARD,
+        "-c", "SET statement_timeout = '15s'",
+        "-c", "BEGIN TRANSACTION READ ONLY",
+        "-c", q,
+        "-c", "ROLLBACK",
+    ]
+
+
+async def pg_read(container: str, query: str, database: str = "postgres") -> dict:
+    argv = _pg_read_argv(database, query)
+    if isinstance(argv, str):
+        return {"container": container, "error": argv}
+    out = await docker_exec(container, argv)
+    output = out.get("output") or ""
+    if out.get("exit_code") and f'"{_PG_ROLE}"' in output:
+        out["hint"] = (f"в этом контейнере не настроена роль {_PG_ROLE} (skills/db/agent_ro.sql); "
+                       "прочитать можно через docker_query — с подтверждением")
+    # argv со служебными -c агенту ни к чему: он видит свой запрос и вывод.
+    out["command"] = ["pg_read", database, query]
+    return out
+
+
 def build_tools() -> list[Tool]:
     return [
+        Tool("docker_ps", "List all docker containers — find the database container here instead of guessing its name.", NoParams, docker_ps, Safety.SAFE),
+        Tool("pg_read", "Read from a PostgreSQL database in a container. Safe, runs without confirmation: read-only role in a READ ONLY transaction. ONE statement per call (no ';' inside), or a describe meta-command (\\l, \\dt, \\dn, \\dv, \\d table). Prefer this over docker_query for any reading.", PgReadParams, pg_read, Safety.SAFE),
         Tool("docker_query", "Run a database query inside a container via its client (psql, mysql, sqlite3; query passed via -c/-e). Refuses obvious writes, DDL and shell escapes, but that filter is NOT a read-only guarantee, so EVERY call requires user confirmation — gather what you need in one or two queries. For data changes use docker_exec.", ExecParams, docker_query, Safety.DANGEROUS, precheck=container_missing),
     ]

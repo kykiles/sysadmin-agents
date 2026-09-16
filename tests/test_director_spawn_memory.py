@@ -341,10 +341,12 @@ def _telegram_gateway():
 
 
 async def _wait_pending(gw, n):
-    for _ in range(200):
-        await asyncio.sleep(0)
+    # По времени, а не по числу тиков: Директор ходит в поток (оглавление памяти),
+    # и под нагрузкой 200 тиков не хватало.
+    for _ in range(500):
         if len(gw._pending) == n:
             return
+        await asyncio.sleep(0.01)
 
 
 async def test_two_specialists_get_separate_confirmations(tmp_path):

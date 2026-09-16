@@ -50,10 +50,10 @@ def test_load_all_skills_includes_docker():
 def test_db_and_host_skills_load():
     skills = load_all_skills(SKILLS_DIR)
     assert {"docker", "db", "host"} <= set(skills)
-    db_tools = {t.name for t in skills["db"].tools}
-    assert db_tools == {"docker_query"}
-    # фильтр запросов не гарантирует read-only (аудит 2026-09-12, F03)
-    assert skills["db"].tools[0].safety is Safety.DANGEROUS
+    db_tools = {t.name: t.safety for t in skills["db"].tools}
+    # фильтр docker_query не гарантирует read-only (аудит 2026-09-12, F03);
+    # автоматически читает только pg_read — под ролью без прав записи (T17)
+    assert db_tools == {"docker_query": Safety.DANGEROUS, "pg_read": Safety.SAFE, "docker_ps": Safety.SAFE}
     # host не приносит готовых инструментов — он объявляет доступ к хосту,
     # из которого при спавне собирается host_query (+ shell_exec)
     assert skills["host"].tools == []
