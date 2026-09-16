@@ -19,6 +19,7 @@ from app.memory.facts import get_store
 from app.skills.loader import load_all_skills
 from app.memory.tools import build_tools as memory_tools
 from app.skills.readonly import HostAccess, build_host_tools
+from app.skills.resources import build_resource_tools
 from app.tools.base import Tool, Safety
 
 log = get_logger("director")
@@ -42,7 +43,7 @@ class RecallExperienceParams(BaseModel):
 
 
 class WriteSkillParams(BaseModel):
-    name: str = Field(description="snake_case skill name, latin, e.g. weekly_report")
+    name: str = Field(description="kebab-case skill name, latin, e.g. weekly-report")
     description: str = Field(
         description="one line saying WHEN it applies and WHAT it does — this is the only "
                     "thing you will see when choosing skills later, so name the triggers: "
@@ -55,7 +56,8 @@ class WriteSkillParams(BaseModel):
     )
 
 
-_SKILL_NAME = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
+# Формат Agent Skills: строчные латинские буквы, цифры, дефисы; имя = каталог.
+_SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 
 # Плейбук уходит в промпт агента при каждом spawn, поэтому длина — это цена в токенах
 # на всю его дальнейшую жизнь. Ручные скилы укладываются в 60 строк; просьбу в промпте
@@ -265,10 +267,13 @@ class Director(Agent):
             # Доступ к хосту складывается: агенту с tls+security нужен один host_query,
             # видящий бинарники обоих навыков, иначе он натыкался бы на отказы.
             access = reduce(or_, (s.access for s in chosen), HostAccess())
+            resources = build_resource_tools(chosen)
             if (untrusted := [s.name for s in chosen if s.untrusted]) and (
                 access.binaries
                 or access.exec_allowed
                 or any(t.safety is Safety.DANGEROUS for s in chosen for t in s.tools)
+                # run_skill_script — чужой код в контейнере агентов
+                or any(t.safety is Safety.DANGEROUS for t in resources)
                 # скил, чьи инструменты строятся по доступу (ssh), даёт доступ к нодам
                 or any(s.access_tools for s in chosen)
             ):
@@ -292,6 +297,7 @@ class Director(Agent):
                   for t in (_budgeted(s.tools, _UNTRUSTED_CALL_BUDGET) if s.untrusted else s.tools)),
                 *(t for s in chosen if s.access_tools for t in s.access_tools(access)),
                 *build_host_tools(access),
+                *resources,
             ]
             for t in candidates:
                 if _identity(uniq.setdefault(t.name, t)) != _identity(t):
@@ -318,8 +324,10 @@ class Director(Agent):
             return {"agent": sub.name, "result": result.content, "success": result.success}
 
         async def _write_skill(name: str, description: str, instructions: str) -> dict:
-            if not _SKILL_NAME.match(name):
-                return {"error": "имя навыка: латиница snake_case, 3-31 символ"}
+            if not (3 <= len(name) <= 64 and _SKILL_NAME.fullmatch(name)):
+                return {"error": "имя навыка: латиница kebab-case (weekly-report), 3-64 символа"}
+            if len(description) > 1024 or not description.strip():
+                return {"error": "description: одна строка до 1024 символов"}
             if len(instructions) > _SKILL_MAX_CHARS:
                 return {"error": f"плейбук длиннее {_SKILL_MAX_CHARS} символов — сократи до сути"}
             d = skills_dir / name

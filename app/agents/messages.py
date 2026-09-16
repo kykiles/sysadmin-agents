@@ -42,7 +42,7 @@ class Result(BaseModel):
 
 
 # Аргументы, которые называют цель вызова: сервер, контейнер, проект, сайт, скрипт.
-_SCOPE_KEYS = ("host", "container", "project", "site", "script")
+_SCOPE_KEYS = ("host", "container", "project", "site", "skill", "script")
 _OPAQUE_PROGRAMS = {
     "sh", "bash", "dash", "ash", "zsh", "env", "sudo", "su", "nsenter", "busybox",
     "python", "python3", "perl", "node", "xargs", "timeout", "nohup",

@@ -47,10 +47,10 @@ def _write_skill(tmp_path, body: str):
 FRONTMATTER = """---
 name: search
 description: поиск в интернете
-mcp:
-  url: https://example.test/mcp/?key=${TEST_MCP_KEY}
-safety: safe
-untrusted: true
+metadata:
+  mcp-url: https://example.test/mcp/?key=${TEST_MCP_KEY}
+  mcp-safety: safe
+  untrusted: "true"
 ---
 
 ## Навык: поиск
@@ -78,7 +78,7 @@ def test_missing_safety_field_means_dangerous(tmp_path, monkeypatch):
         mcp_bridge, "build_tools",
         lambda config, safety, name: got.setdefault("safety", safety) and [],
     )
-    load_skill(_write_skill(tmp_path, FRONTMATTER.replace("safety: safe\n", "")))
+    load_skill(_write_skill(tmp_path, FRONTMATTER.replace("  mcp-safety: safe\n", "")))
     assert got["safety"] is Safety.DANGEROUS
 
 

@@ -1,4 +1,4 @@
-from app.skills.loader import Skill
+from app.skills.loader import Skill, resource_files
 
 
 # Общие правила эффективности для всех специалистов: число шагов ограничено, поэтому
@@ -18,4 +18,8 @@ def compose_prompt(role: str, skills: list[Skill]) -> str:
     parts = [role.strip(), _EFFICIENCY_RULES]
     for skill in skills:
         parts.append(skill.instructions)
+        # Ссылки в SKILL.md идут от корня навыка; сами файлы — по запросу, не в промпт.
+        if files := resource_files(skill):
+            parts.append(f"Файлы навыка `{skill.name}` (read_skill_file / run_skill_script): "
+                         + ", ".join(files))
     return "\n\n".join(parts)

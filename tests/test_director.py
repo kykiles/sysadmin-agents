@@ -50,32 +50,33 @@ def _write_skill_tool(tmp_path, skills=None):
 async def test_write_skill_creates_playbook_and_reloads_library(tmp_path):
     d, tool = _write_skill_tool(tmp_path)
 
-    out = await tool.fn(name="weekly_report", description="когда просят недельный отчёт",
+    out = await tool.fn(name="weekly-report", description="когда просят недельный отчёт",
                         instructions="1. Собери метрики\n2. Сведи в таблицу")
 
-    assert out["saved"] == "weekly_report"
-    text = (tmp_path / "weekly_report" / "SKILL.md").read_text(encoding="utf-8")
+    assert out["saved"] == "weekly-report"
+    text = (tmp_path / "weekly-report" / "SKILL.md").read_text(encoding="utf-8")
     assert text.startswith("---\n") and "Собери метрики" in text
     # навык виден сразу — spawn берёт библиотеку с инстанса
-    assert "weekly_report" in d._library
+    assert "weekly-report" in d._library
 
 
 async def test_write_skill_survives_colons_in_description(tmp_path):
     """description от модели уходит в YAML: двоеточие сломало бы ручную склейку."""
     d, tool = _write_skill_tool(tmp_path)
 
-    await tool.fn(name="tls_check", description="проверка TLS: срок и цепочка",
+    await tool.fn(name="tls-check", description="проверка TLS: срок и цепочка",
                   instructions="шаги")
 
-    assert d._library["tls_check"].description == "проверка TLS: срок и цепочка"
+    assert d._library["tls-check"].description == "проверка TLS: срок и цепочка"
 
 
 async def test_write_skill_refuses_bad_name(tmp_path):
     _, tool = _write_skill_tool(tmp_path)
 
-    out = await tool.fn(name="../etc", description="d", instructions="i")
-
-    assert "error" in out and not list(tmp_path.iterdir())
+    for bad in ("../etc", "weekly_report", "Weekly-Report", "-x-", "a--b"):
+        out = await tool.fn(name=bad, description="d", instructions="i")
+        assert "error" in out, bad
+    assert not list(tmp_path.iterdir())
 
 
 async def test_write_skill_refuses_to_overwrite_a_skill_with_code(tmp_path):

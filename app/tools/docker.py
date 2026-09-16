@@ -164,13 +164,13 @@ async def docker_exec(container: str, command: list[str]) -> dict:
 # ---------- host shell ----------
 
 async def _run_subprocess(command: list[str], timeout: float | None = None,
-                          input: bytes | None = None) -> dict:
+                          input: bytes | None = None, cwd: str | None = None) -> dict:
     """`input` — для данных, которым не место в argv (и в поле `command` результата):
     argv виден в списке процессов и возвращается агенту."""
     to = timeout if timeout is not None else settings.shell_timeout_seconds
     proc = await asyncio.create_subprocess_exec(
         *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        stdin=asyncio.subprocess.PIPE if input is not None else None,
+        stdin=asyncio.subprocess.PIPE if input is not None else None, cwd=cwd,
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(input), timeout=to)
