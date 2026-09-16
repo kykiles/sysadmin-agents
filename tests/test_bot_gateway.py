@@ -274,15 +274,16 @@ async def test_release_forgets_refusals():
 async def test_progress_marks_waiting_while_human_decides():
     progress = MagicMock()
     progress.waiting = AsyncMock()
+    progress.refused = AsyncMock()
     gw = TelegramConfirmationGateway(_bot(), chat_id=OWNER, timeout=5, progress=progress)
     task, rid = await _start(gw)
     progress.waiting.assert_awaited_once_with("a#1", True)
     assert _owner(gw, rid)
     await task
     assert progress.waiting.await_args_list[-1].args == ("a#1", False)
-    progress.refused.assert_not_called()
+    progress.refused.assert_not_awaited()
 
     task, rid = await _start(gw)
     assert _owner(gw, rid, Decision.REJECTED)
     await task
-    progress.refused.assert_called_once_with("a#1")
+    progress.refused.assert_awaited_once_with("a#1")

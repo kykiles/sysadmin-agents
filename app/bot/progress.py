@@ -1,8 +1,10 @@
 """Живой TODO-лист задачи в Telegram: одно сообщение, которое правится на месте.
 
-Пункты пишет Директор инструментом plan, отметки ставит код: spawn с номером пункта
-отмечает его начатым и завершённым, шлюз подтверждений — ждущим решения человека.
-Модели отмечать прогресс не нужно — забытая отметка не соврёт о состоянии задачи.
+Пункты пишет Директор инструментом plan и раздаёт их агентам в spawn(steps=...).
+Выполнение отмечает сам агент (mark_step): он знает, что сделал, а код видит только
+«агент закончил» — автоматическая ✅ по этому признаку врала после отказа в
+подтверждении. Код ставит то, что знает точно: пункт в работе, ждёт подтверждения,
+пользователь отказал. В конце задачи неотмеченный пункт получает ➖.
 """
 import asyncio
 import html
@@ -12,20 +14,24 @@ from app.logging import get_logger
 
 log = get_logger("progress")
 
+_MARKS = {"done": "✅", "failed": "❌", "skipped": "➖"}
+
 
 @dataclass
 class _Step:
     text: str
+    # pending | done | failed | skipped
+    status: str = "pending"
     active: int = 0
     waiting: int = 0
-    done: bool = False
-    failed: bool = False
 
     def render(self) -> str:
+        text = html.escape(self.text)
         if self.waiting:
-            return f"⏳ {html.escape(self.text)}\n      <i>ждёт вашего подтверждения</i>"
-        mark = "⏳" if self.active else "❌" if self.failed else "✅" if self.done else "⬜"
-        return f"{mark} {html.escape(self.text)}"
+            return f"⏳ {text}\n      <i>ждёт вашего подтверждения</i>"
+        if self.status in _MARKS:
+            return f"{_MARKS[self.status]} {text}"
+        return f"{'⏳' if self.active else '⬜'} {text}"
 
 
 @dataclass
@@ -41,10 +47,11 @@ class TelegramProgress:
     bot: object
     chat_id: int
     _boards: dict[str, _Board] = field(default_factory=dict)
-    # agent_id -> (run_id, индекс пункта): шлюз знает агента, но не пункт плана
-    _agents: dict[str, tuple[str, int]] = field(default_factory=dict)
-    # агенты, которым отказали в подтверждении: их пункт не выполнен, как бы они ни завершились
-    _refused: set[str] = field(default_factory=set)
+    # agent_id -> (run_id, индексы его пунктов): шлюз знает агента, но не пункт плана
+    _agents: dict[str, tuple[str, list[int]]] = field(default_factory=dict)
+    # (agent_id, индекс пункта), где агенту отказали: выполненным этот пункт он
+    # отметить не может — действие не выполнено, что бы он ни написал
+    _refused: set[tuple[str, int]] = field(default_factory=set)
     # параллельные агенты правят одно сообщение: без замка второй send_message
     # создал бы дубль списка
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -62,63 +69,94 @@ class TelegramProgress:
             board.title, board.steps = title, new
         await self._show(board)
 
-    def has_step(self, run_id: str, step: int) -> bool:
+    def steps(self, run_id: str) -> list[str] | None:
+        """Тексты пунктов плана; None — плана у задачи нет."""
         board = self._boards.get(run_id)
-        return board is not None and 1 <= step <= len(board.steps)
+        return [s.text for s in board.steps] if board else None
 
-    async def started(self, run_id: str, step: int, agent_id: str) -> None:
-        if not self.has_step(run_id, step):
+    async def started(self, run_id: str, steps: list[int], agent_id: str) -> None:
+        """steps — номера пунктов с 1."""
+        board = self._boards.get(run_id)
+        if board is None:
             return
-        self._agents[agent_id] = (run_id, step - 1)
-        self._boards[run_id].steps[step - 1].active += 1
-        await self._show(self._boards[run_id])
-
-    async def finished(self, agent_id: str, success: bool) -> None:
-        found = self._find(agent_id)
-        if found is None:
-            return
-        board, s = found
-        del self._agents[agent_id]
-        success = success and agent_id not in self._refused
-        self._refused.discard(agent_id)
-        # max: plan мог заменить пункт, пока агент работал
-        s.active = max(0, s.active - 1)
-        # повторный агент на том же пункте исправляет прошлую неудачу
-        s.done, s.failed = (True, False) if success else (s.done, True)
+        indices = [n - 1 for n in steps if 1 <= n <= len(board.steps)]
+        self._agents[agent_id] = (run_id, indices)
+        for i in indices:
+            board.steps[i].active += 1
         await self._show(board)
 
-    def refused(self, agent_id: str) -> None:
-        if agent_id in self._agents:
-            self._refused.add(agent_id)
+    async def finished(self, agent_id: str) -> None:
+        run_id, indices = self._agents.pop(agent_id, ("", []))
+        # отметить пункт завершившийся агент уже не может — запрет ему больше не нужен
+        self._refused = {(a, i) for a, i in self._refused if a != agent_id}
+        board = self._boards.get(run_id)
+        if board is None:
+            return
+        for i in indices:
+            if i < len(board.steps):
+                # max: plan мог заменить пункт, пока агент работал
+                board.steps[i].active = max(0, board.steps[i].active - 1)
+        await self._show(board)
 
-    async def waiting(self, agent_id: str, on: bool) -> None:
-        found = self._find(agent_id)
+    async def mark(self, agent_id: str, step: int, status: str) -> dict:
+        """Отметка агента. Ответ уходит агенту результатом mark_step."""
+        run_id, indices = self._agents.get(agent_id, ("", []))
+        board = self._boards.get(run_id)
+        if board is None or step - 1 not in indices or step > len(board.steps):
+            return {"error": f"пункт {step} не твой — твои: {[i + 1 for i in indices]}"}
+        if status == "done" and (agent_id, step - 1) in self._refused:
+            return {"error": "по этому пункту пользователь отказал в подтверждении — "
+                             "он не выполнен, отметь failed"}
+        board.steps[step - 1].status = status
+        await self._show(board)
+        return {"marked": step, "status": status}
+
+    async def refused(self, agent_id: str) -> None:
+        """Отказ в подтверждении — факт, а не мнение агента: его текущий пункт ❌."""
+        found = self._current(agent_id)
         if found is None:
             return
-        board, s = found
-        s.waiting = max(0, s.waiting + (1 if on else -1))
+        board, i = found
+        self._refused.add((agent_id, i))
+        board.steps[i].status = "failed"
+        await self._show(board)
+
+    async def waiting(self, agent_id: str, on: bool) -> None:
+        found = self._current(agent_id)
+        if found is None:
+            return
+        board, i = found
+        step = board.steps[i]
+        step.waiting = max(0, step.waiting + (1 if on else -1))
         await self._show(board)
 
     async def finish(self, run_id: str) -> None:
-        """Задача закончилась. Пункт, оставшийся «в работе» (задача упала или её
-        отменили), помечается неудачным: часики навсегда вводили бы в заблуждение."""
+        """Задача закончилась. Неотмеченный пункт: ❌, если на нём остался работающий
+        агент (задача упала или её отменили), иначе ➖ — его никто не выполнил."""
         board = self._boards.pop(run_id, None)
-        self._refused -= {a for a, v in self._agents.items() if v[0] == run_id}
-        self._agents = {a: v for a, v in self._agents.items() if v[0] != run_id}
+        mine = {a for a, (r, _) in self._agents.items() if r == run_id}
+        self._agents = {a: v for a, v in self._agents.items() if a not in mine}
+        self._refused = {(a, i) for a, i in self._refused if a not in mine}
         if board is None:
             return
         for s in board.steps:
-            if s.active or s.waiting:
-                s.active = s.waiting = 0
-                s.failed = True
+            if s.status == "pending":
+                s.status = "failed" if s.active or s.waiting else "skipped"
+            s.active = s.waiting = 0
         await self._show(board)
 
-    def _find(self, agent_id: str) -> tuple[_Board, _Step] | None:
-        run_id, index = self._agents.get(agent_id, ("", -1))
+    def _current(self, agent_id: str) -> tuple[_Board, int] | None:
+        """Пункт, над которым агент сейчас работает: пункты он ведёт по порядку,
+        значит это первый неотмеченный из его пунктов, а если отмечены все — последний."""
+        run_id, indices = self._agents.get(agent_id, ("", []))
         board = self._boards.get(run_id)
-        if board is None or index >= len(board.steps):
+        if board is None:
             return None
-        return board, board.steps[index]
+        indices = [i for i in indices if i < len(board.steps)]
+        if not indices:
+            return None
+        pending = [i for i in indices if board.steps[i].status == "pending"]
+        return board, pending[0] if pending else indices[-1]
 
     async def _show(self, board: _Board) -> None:
         async with self._lock:

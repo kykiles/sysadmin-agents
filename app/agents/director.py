@@ -5,6 +5,7 @@ from dataclasses import replace
 from functools import reduce
 from operator import or_
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -29,7 +30,15 @@ class SpawnParams(BaseModel):
     role: str = Field(description="one-line role for the temporary agent, in Russian")
     skills: list[str] = Field(description="names of skills to grant, from the available skills list")
     task: str = Field(description="clear, self-contained task description for the agent")
-    step: int | None = Field(default=None, description="number of the plan step (from 1) this agent performs")
+    steps: list[int] = Field(default_factory=list,
+                             description="numbers of the plan steps (from 1) this agent performs; "
+                                         "required when there is a plan")
+
+
+class MarkStepParams(BaseModel):
+    step: int = Field(description="номер пункта плана из твоего списка")
+    status: Literal["done", "failed", "skipped"] = Field(
+        description="done — выполнен, failed — не удался, skipped — не понадобился")
 
 
 class PlanParams(BaseModel):
@@ -91,9 +100,11 @@ _EXPERIENCE_BLOCK = (
 _PLAN_BLOCK = (
     "План: прежде чем поручать работу агентам, вызови plan — заголовок и 2–6 пунктов "
     "обычным языком, понятным человеку без знания команд. Пользователь видит этот список "
-    "в Telegram и следит по нему за ходом задачи. В каждом spawn указывай step — номер "
-    "пункта, который выполняет агент: отметки ставятся сами. Изменился план по ходу — "
-    "вызови plan снова. Задаче, где агенты не нужны, план не нужен.\n\n"
+    "в Telegram и следит по нему за ходом задачи. В каждом spawn указывай steps — номера "
+    "всех пунктов, которые выполняет агент (один агент может вести несколько): он сам "
+    "отметит их выполнение. Пункты плана — только работа агентов: свести результаты и "
+    "ответить пользователю ты делаешь сам, это не пункт. Изменился план по ходу — вызови "
+    "plan снова. Задаче, где агенты не нужны, план не нужен.\n\n"
 )
 
 
@@ -206,6 +217,18 @@ def _identity(tool: Tool) -> tuple:
     return (tool.fn, tool.params_model, tool.safety)
 
 
+def _steps_block(steps: dict[int, str]) -> str:
+    lines = "\n".join(f"{n}. {text}" for n, text in steps.items())
+    return (
+        "Пункты плана, за которые отвечаешь ты (пользователь следит за ними списком "
+        f"в Telegram):\n{lines}\n"
+        "Как только пункт выполнен, отметь его mark_step(step, \"done\") — можно в том же "
+        "ходе, что и другие вызовы. Не удался — \"failed\", не понадобился — \"skipped\". "
+        "Отмечай по порядку и только сделанное: если пользователь отказал в подтверждении, "
+        "пункт не выполнен."
+    )
+
+
 def _memory_index() -> str:
     """Оглавление памяти в промпт — области, ключи и «когда пригодится»; сами
     значения по запросу.
@@ -285,11 +308,18 @@ class Director(Agent):
             await progress.plan(self._run_id, title, steps)
             return {"shown": len(steps)}
 
-        async def _spawn(role: str, skills: list[str], task: str, step: int | None = None) -> dict:
+        async def _spawn(role: str, skills: list[str], task: str, steps: list[int] | None = None) -> dict:
             # библиотеку читаем с инстанса — /reload подменяет её на ходу
             unknown = [s for s in skills if s not in self._library]
             if unknown:
                 return {"error": f"неизвестные навыки: {unknown}", "available": list(self._library)}
+            plan = progress.steps(self._run_id) if progress is not None else None
+            steps = sorted(set(steps or []))
+            # Без номеров пункты агента некому отметить, и они висят ⬜ — поэтому не просьба
+            # в промпте, а отказ: Директор исправит вызов.
+            if plan is not None and (not steps or not all(1 <= n <= len(plan) for n in steps)):
+                return {"error": "укажи steps — номера пунктов плана, которые выполняет агент",
+                        "plan": {i + 1: text for i, text in enumerate(plan)}}
             chosen = [self._library[s] for s in skills]
             # Доступ к хосту складывается: агенту с tls+security нужен один host_query,
             # видящий бинарники обоих навыков, иначе он натыкался бы на отказы.
@@ -326,15 +356,29 @@ class Director(Agent):
                 *build_host_tools(access),
                 *resources,
             ]
+            if plan is not None:
+                async def _mark_step(step: int, status: str) -> dict:
+                    return await progress.mark(sub.agent_id, step, status)
+
+                # Инструмент ядра, как host_query: навыки о нём не знают и его не объявляют.
+                candidates.append(Tool(
+                    "mark_step",
+                    "Mark one of YOUR plan steps in the user's live TODO list as soon as it is "
+                    "finished. Can be called in the same turn as other tools. Safe.",
+                    MarkStepParams, _mark_step, Safety.SAFE,
+                ))
             for t in candidates:
                 if _identity(uniq.setdefault(t.name, t)) != _identity(t):
                     return {"error": (
                         f"инструмент {t.name} в выданных навыках реализован по-разному — "
                         "выдай эти навыки разным агентам"
                     )}
+            prompt = compose_prompt(role, chosen)
+            if plan is not None:
+                prompt += "\n\n" + _steps_block({n: plan[n - 1] for n in steps})
             sub = Agent(
                 name=f"spawned:{'+'.join(skills)}",
-                system_prompt=compose_prompt(role, chosen),
+                system_prompt=prompt,
                 tools=list(uniq.values()),
                 llm=agent_llm,
                 gateway=gateway,
@@ -342,20 +386,16 @@ class Director(Agent):
             # Вывод такого агента вернётся в контекст Директора: всё, что он запишет
             # в память по итогам этой задачи, уходит в карантин (аудит F09).
             self._untrusted_skills.update(s.name for s in chosen if s.untrusted)
-            log.info("spawn", role=role, skills=skills, step=step)
-            tracked = progress is not None and step is not None and progress.has_step(self._run_id, step)
-            if tracked:
-                await progress.started(self._run_id, step, sub.agent_id)
+            log.info("spawn", role=role, skills=skills, steps=steps)
+            if plan is not None:
+                await progress.started(self._run_id, steps, sub.agent_id)
             # Временный агент: не регистрируем в реестре, вызываем напрямую и забываем
             # вместе с контекстом. memory не передаём — истории у него быть не должно.
             try:
                 result = await sub.handle(Task(content=task, run_id=self._run_id))
-            except BaseException:
-                if tracked:
-                    await progress.finished(sub.agent_id, success=False)
-                raise
-            if tracked:
-                await progress.finished(sub.agent_id, success=result.success)
+            finally:
+                if plan is not None:
+                    await progress.finished(sub.agent_id)
             self._sub_trace.extend(result.trace)
             self._agents_used.append(sub.name)
             return {"agent": sub.name, "result": result.content, "success": result.success}

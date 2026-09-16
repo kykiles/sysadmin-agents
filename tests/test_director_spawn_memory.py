@@ -438,30 +438,74 @@ async def test_remember_fact_shows_similar_but_writes_anyway(tmp_path):
 
 # ---------- TODO-лист: план от Директора, отметки ставит код ----------
 
-async def test_plan_and_spawn_step_drive_todo_list(tmp_path):
+def _progress_bot():
     from unittest.mock import AsyncMock, MagicMock
     from app.bot.progress import TelegramProgress
 
-    facts.init_store(str(tmp_path / "f.db"))
     bot = MagicMock()
     bot.send_message = AsyncMock(return_value=MagicMock(message_id=7))
     bot.edit_message_text = AsyncMock()
-    progress = TelegramProgress(bot, 1)
-    llm = FakeLLM([
+    return TelegramProgress(bot, 1), bot
+
+
+async def test_agent_marks_plan_steps_itself(tmp_path):
+    facts.init_store(str(tmp_path / "f.db"))
+    progress, bot = _progress_bot()
+    director_llm = FakeLLM([
         _call("plan", {"title": "Пост", "steps": ["Написать пост", "Проверить"]}),
-        _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши", "step": 1}),
-        ChoiceMessage(content="написал", tool_calls=None),
+        _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши", "steps": [1, 2]}),
         ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    agent_llm = FakeLLM([
+        _call("mark_step", {"step": 1, "status": "done"}),
+        ChoiceMessage(content="написал", tool_calls=None),
+    ])
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    await d.handle(Task(content="пост"))
+
+    shown = [c.args[0] for c in bot.edit_message_text.await_args_list]
+    assert shown == ["<b>Пост</b>\n\n⏳ Написать пост\n⏳ Проверить",
+                     "<b>Пост</b>\n\n✅ Написать пост\n⏳ Проверить",
+                     "<b>Пост</b>\n\n✅ Написать пост\n⬜ Проверить",
+                     "<b>Пост</b>\n\n✅ Написать пост\n➖ Проверить"]
+    assert progress._boards == {}
+    assert "plan" in [t["function"]["name"] for t in director_llm.seen_tools[0]]
+    # пункты агента — в его промпте, mark_step — в его инструментах
+    (sub,) = agent_llm.seen[:1]
+    assert "1. Написать пост\n2. Проверить" in sub[0]["content"]
+    assert "mark_step" in [t["function"]["name"] for t in agent_llm.seen_tools[0]]
+
+
+async def test_spawn_without_steps_is_refused_when_plan_exists(tmp_path):
+    facts.init_store(str(tmp_path / "f.db"))
+    progress, _ = _progress_bot()
+    llm = FakeLLM([
+        _call("plan", {"title": "Пост", "steps": ["Написать"]}),
+        _call("spawn", {"role": "к", "skills": ["writer"], "task": "напиши"}),
+        _call("spawn", {"role": "к", "skills": ["writer"], "task": "напиши", "steps": [5]}),
+        ChoiceMessage(content="Не вышло.", tool_calls=None),
     ])
     d = Director(llm=llm, skills=_skill(), progress=progress)
     await d.handle(Task(content="пост"))
 
-    shown = [c.args[0] for c in bot.edit_message_text.await_args_list]
-    assert bot.send_message.await_args.args[1] == "<b>Пост</b>\n\n⬜ Написать пост\n⬜ Проверить"
-    assert shown == ["<b>Пост</b>\n\n⏳ Написать пост\n⬜ Проверить",
-                     "<b>Пост</b>\n\n✅ Написать пост\n⬜ Проверить"]
-    assert progress._boards == {}
-    assert "plan" in [t["function"]["name"] for t in llm.seen_tools[0]]
+    refusals = [m["content"] for m in llm.seen[-1] if m["role"] == "tool"][1:]
+    assert all("укажи steps" in r for r in refusals) and len(refusals) == 2
+    assert d._agents_used == []
+
+
+async def test_spawn_without_plan_needs_no_steps_and_gets_no_mark_step(tmp_path):
+    facts.init_store(str(tmp_path / "f.db"))
+    progress, _ = _progress_bot()
+    director_llm = FakeLLM([
+        _call("spawn", {"role": "к", "skills": ["writer"], "task": "напиши"}),
+        ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    agent_llm = FakeLLM([ChoiceMessage(content="написал", tool_calls=None)])
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    await d.handle(Task(content="пост"))
+
+    assert d._agents_used == ["spawned:writer"]
+    assert "mark_step" not in [t["function"]["name"] for t in agent_llm.seen_tools[0]]
 
 
 def test_no_plan_tool_without_progress():

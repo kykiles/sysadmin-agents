@@ -18,69 +18,112 @@ def _last(bot):
     return bot.send_message.await_args.args[1]
 
 
+def _lines(bot):
+    return _last(bot).split("\n\n", 1)[1]
+
+
 async def test_plan_is_sent_once_then_edited_in_place():
     p, bot = _progress()
     await p.plan("r", "Пересборка remnabot", ["Найти проект", "Пересобрать"])
     assert _last(bot) == "<b>Пересборка remnabot</b>\n\n⬜ Найти проект\n⬜ Пересобрать"
+    assert p.steps("r") == ["Найти проект", "Пересобрать"]
 
-    await p.started("r", 1, "a#1")
+    await p.started("r", [1, 2], "a#1")
     assert bot.send_message.await_count == 1
     assert bot.edit_message_text.await_args.kwargs == {"chat_id": CHAT, "message_id": 7}
-    assert "⏳ Найти проект" in _last(bot)
-
-    await p.finished("a#1", success=True)
-    assert "✅ Найти проект\n⬜ Пересобрать" in _last(bot)
+    assert _lines(bot) == "⏳ Найти проект\n⏳ Пересобрать"
 
 
-async def test_waiting_for_confirmation_is_shown_under_step():
+async def test_agent_marks_its_steps_one_by_one():
+    p, bot = _progress()
+    await p.plan("r", "t", ["Найти проект", "Пересобрать", "Проверить"])
+    await p.started("r", [1, 2, 3], "a#1")
+    assert await p.mark("a#1", 1, "done") == {"marked": 1, "status": "done"}
+    assert _lines(bot) == "✅ Найти проект\n⏳ Пересобрать\n⏳ Проверить"
+    await p.mark("a#1", 2, "done")
+    await p.mark("a#1", 3, "skipped")
+    await p.finished("a#1")
+    assert _lines(bot) == "✅ Найти проект\n✅ Пересобрать\n➖ Проверить"
+
+
+async def test_agent_cannot_mark_foreign_step():
+    p, bot = _progress()
+    await p.plan("r", "t", ["Один", "Два"])
+    await p.started("r", [1], "a#1")
+    assert "не твой" in (await p.mark("a#1", 2, "done"))["error"]
+    assert "не твой" in (await p.mark("a#2", 1, "done"))["error"]
+    assert _lines(bot) == "⏳ Один\n⬜ Два"
+
+
+async def test_finishing_agent_does_not_mark_steps_done():
+    """Автоматическая ✅ за «агент закончил» врала после отказа в подтверждении."""
     p, bot = _progress()
     await p.plan("r", "t", ["Пересобрать"])
-    await p.started("r", 1, "a#1")
+    await p.started("r", [1], "a#1")
+    await p.finished("a#1")
+    assert _lines(bot) == "⬜ Пересобрать"
+    await p.finish("r")
+    assert _lines(bot) == "➖ Пересобрать"
+
+
+async def test_waiting_and_refusal_land_on_current_step():
+    """Живой прогон: агент осмотрел проект, а пересборку пользователь отклонил —
+    ❌ должен получить только пункт пересборки."""
+    p, bot = _progress()
+    await p.plan("r", "t", ["Найти проект", "Пересобрать", "Проверить"])
+    await p.started("r", [1, 2, 3], "a#1")
+    await p.mark("a#1", 1, "done")
     await p.waiting("a#1", True)
-    assert "⏳ Пересобрать\n      <i>ждёт вашего подтверждения</i>" in _last(bot)
+    assert _lines(bot) == ("✅ Найти проект\n⏳ Пересобрать\n      <i>ждёт вашего подтверждения</i>\n"
+                           "⏳ Проверить")
     await p.waiting("a#1", False)
-    await p.finished("a#1", success=False)
-    assert _last(bot).endswith("❌ Пересобрать")
+    await p.refused("a#1")
+    assert "отметь failed" in (await p.mark("a#1", 2, "done"))["error"]
+    await p.finished("a#1")
+    await p.finish("r")
+    assert _lines(bot) == "✅ Найти проект\n❌ Пересобрать\n➖ Проверить"
+    assert p._refused == set() and p._agents == {}
 
 
-async def test_retry_on_same_step_clears_failure():
+async def test_new_agent_may_redo_refused_step():
     p, bot = _progress()
     await p.plan("r", "t", ["Пересобрать"])
-    await p.started("r", 1, "a#1")
-    await p.finished("a#1", success=False)
-    await p.started("r", 1, "a#2")
-    await p.finished("a#2", success=True)
-    assert _last(bot).endswith("✅ Пересобрать")
+    await p.started("r", [1], "a#1")
+    await p.refused("a#1")
+    await p.finished("a#1")
+    await p.started("r", [1], "a#2")
+    await p.mark("a#2", 1, "done")
+    assert _lines(bot) == "✅ Пересобрать"
 
 
 async def test_replan_keeps_marks_of_unchanged_steps():
     p, bot = _progress()
     await p.plan("r", "t", ["Найти проект", "Пересобрать"])
-    await p.started("r", 1, "a#1")
-    await p.finished("a#1", success=True)
+    await p.started("r", [1], "a#1")
+    await p.mark("a#1", 1, "done")
+    await p.finished("a#1")
     await p.plan("r", "t", ["Найти проект", "Пересобрать образ", "Проверить"])
-    assert _last(bot).endswith("✅ Найти проект\n⬜ Пересобрать образ\n⬜ Проверить")
+    assert _lines(bot) == "✅ Найти проект\n⬜ Пересобрать образ\n⬜ Проверить"
 
 
-async def test_finish_marks_unfinished_work_as_failed_and_forgets_run():
+async def test_finish_fails_steps_with_running_agent():
     p, bot = _progress()
     await p.plan("r", "t", ["Пересобрать", "Проверить"])
-    await p.started("r", 1, "a#1")
+    await p.started("r", [1], "a#1")
     await p.finish("r")
-    assert _last(bot).endswith("❌ Пересобрать\n⬜ Проверить")
+    assert _lines(bot) == "❌ Пересобрать\n➖ Проверить"
     edits = bot.edit_message_text.await_count
-    await p.finished("a#1", success=True)
+    await p.finished("a#1")
     assert bot.edit_message_text.await_count == edits
+    assert p.steps("r") is None
 
 
-async def test_unknown_step_and_agent_are_ignored():
+async def test_unknown_agent_is_ignored():
     p, bot = _progress()
-    await p.started("r", 1, "a#1")
     await p.waiting("a#1", True)
-    await p.plan("r", "t", ["Один"])
-    await p.started("r", 5, "a#2")
-    assert bot.send_message.await_count == 1
-    bot.edit_message_text.assert_not_awaited()
+    await p.refused("a#1")
+    await p.finished("a#1")
+    bot.send_message.assert_not_awaited()
 
 
 async def test_html_is_escaped():
@@ -93,16 +136,5 @@ async def test_telegram_failure_does_not_break_task():
     p, bot = _progress()
     bot.send_message = AsyncMock(side_effect=RuntimeError("telegram down"))
     await p.plan("r", "t", ["Один"])
-    await p.started("r", 1, "a#1")
+    await p.started("r", [1], "a#1")
     await p.finish("r")
-
-
-async def test_refused_confirmation_fails_step_even_if_agent_finished_normally():
-    """Живой прогон: после «Нет» агент завершился штатно, и пункт получил ✅."""
-    p, bot = _progress()
-    await p.plan("r", "t", ["Пересобрать"])
-    await p.started("r", 1, "a#1")
-    p.refused("a#1")
-    await p.finished("a#1", success=True)
-    assert _last(bot).endswith("❌ Пересобрать")
-    assert p._refused == set()
