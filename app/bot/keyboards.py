@@ -27,8 +27,8 @@ def review_markup(outcome) -> InlineKeyboardMarkup:
 
 
 def approve_keyboard(request_id: str, with_all: bool = False) -> InlineKeyboardMarkup:
-    row = [InlineKeyboardButton(text="Yes", callback_data=f"cf:{request_id}:yes")]
+    row = [InlineKeyboardButton(text="Да", callback_data=f"cf:{request_id}:yes")]
     if with_all:
-        row.append(InlineKeyboardButton(text="Yes to all", callback_data=f"cf:{request_id}:all"))
-    row.append(InlineKeyboardButton(text="No", callback_data=f"cf:{request_id}:no"))
+        row.append(InlineKeyboardButton(text="Да, для всех таких", callback_data=f"cf:{request_id}:all"))
+    row.append(InlineKeyboardButton(text="Нет", callback_data=f"cf:{request_id}:no"))
     return InlineKeyboardMarkup(inline_keyboard=[row])

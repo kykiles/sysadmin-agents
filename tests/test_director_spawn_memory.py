@@ -434,3 +434,43 @@ async def test_remember_fact_shows_similar_but_writes_anyway(tmp_path):
     result = next(m for m in llm.seen[-1] if m.get("role") == "tool")
     assert "dialog_db" in result["content"]
     assert {f["key"] for f in facts.get_store().recall()} == {"dialog_db", "history_path"}
+
+
+# ---------- TODO-лист: план от Директора, отметки ставит код ----------
+
+async def test_plan_and_spawn_step_drive_todo_list(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+    from app.bot.progress import TelegramProgress
+
+    facts.init_store(str(tmp_path / "f.db"))
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=7))
+    bot.edit_message_text = AsyncMock()
+    progress = TelegramProgress(bot, 1)
+    llm = FakeLLM([
+        _call("plan", {"title": "Пост", "steps": ["Написать пост", "Проверить"]}),
+        _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши", "step": 1}),
+        ChoiceMessage(content="написал", tool_calls=None),
+        ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    d = Director(llm=llm, skills=_skill(), progress=progress)
+    await d.handle(Task(content="пост"))
+
+    shown = [c.args[0] for c in bot.edit_message_text.await_args_list]
+    assert bot.send_message.await_args.args[1] == "<b>Пост</b>\n\n⬜ Написать пост\n⬜ Проверить"
+    assert shown == ["<b>Пост</b>\n\n⏳ Написать пост\n⬜ Проверить",
+                     "<b>Пост</b>\n\n✅ Написать пост\n⬜ Проверить"]
+    assert progress._boards == {}
+    assert "plan" in [t["function"]["name"] for t in llm.seen_tools[0]]
+
+
+def test_no_plan_tool_without_progress():
+    d = Director(llm=None, skills=_skill())
+    assert "plan" not in [t.name for t in d.tools]
+    assert "вызови plan" not in d.system_prompt
+
+
+def test_director_does_not_ask_for_confirmation_in_text():
+    """Живой прогон: Директор просил «подтвердите» текстом, а потом кнопки спрашивали снова."""
+    d = Director(llm=None, skills=_skill())
+    assert "не проси «подтвердите» текстом" in d.system_prompt

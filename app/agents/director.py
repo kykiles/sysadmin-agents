@@ -29,6 +29,12 @@ class SpawnParams(BaseModel):
     role: str = Field(description="one-line role for the temporary agent, in Russian")
     skills: list[str] = Field(description="names of skills to grant, from the available skills list")
     task: str = Field(description="clear, self-contained task description for the agent")
+    step: int | None = Field(default=None, description="number of the plan step (from 1) this agent performs")
+
+
+class PlanParams(BaseModel):
+    title: str = Field(description="task title in Russian, a few words")
+    steps: list[str] = Field(description="2-6 steps in plain Russian a non-technical user understands")
 
 
 class MakeReportParams(BaseModel):
@@ -82,9 +88,19 @@ _EXPERIENCE_BLOCK = (
 )
 
 
+_PLAN_BLOCK = (
+    "План: прежде чем поручать работу агентам, вызови plan — заголовок и 2–6 пунктов "
+    "обычным языком, понятным человеку без знания команд. Пользователь видит этот список "
+    "в Telegram и следит по нему за ходом задачи. В каждом spawn указывай step — номер "
+    "пункта, который выполняет агент: отметки ставятся сами. Изменился план по ходу — "
+    "вызови plan снова. Задаче, где агенты не нужны, план не нужен.\n\n"
+)
+
+
 def build_director_prompt(available_skills: dict[str, str] | None = None,
                           with_experience: bool = False,
-                          with_write_skill: bool = False) -> str:
+                          with_write_skill: bool = False,
+                          with_plan: bool = False) -> str:
     spawn_block = ""
     if available_skills:
         skills = "\n".join(f"- {name}: {desc}" for name, desc in available_skills.items())
@@ -98,6 +114,11 @@ def build_director_prompt(available_skills: dict[str, str] | None = None,
             "Памяти у агента нет: всю известную тебе конкретику (имена контейнеров, хостов, "
             "пути, учётки, схемы) выпиши в task дословно. Не переданное он будет угадывать "
             "перебором.\n"
+            "Опасные действия (перезапуск, пересборка, изменения) система сама подтверждает "
+            "у пользователя кнопками в момент вызова. Поэтому не проси «подтвердите» текстом "
+            "и не поручай агенту сначала запросить подтверждение: просят сделать — поручай "
+            "сделать. Если агент сообщил, что пользователь отказал, не поручай то же действие "
+            "снова.\n"
             f"Доступные навыки:\n{skills}"
         )
     return (
@@ -143,6 +164,7 @@ def build_director_prompt(available_skills: dict[str, str] | None = None,
         "токены: recall вернёт почти всю память.\n\n"
         f"{_EXPERIENCE_BLOCK if with_experience else ''}"
         f"{_WRITE_SKILL_BLOCK if with_write_skill else ''}"
+        f"{_PLAN_BLOCK if with_plan and available_skills else ''}"
         f"{spawn_block}"
     )
 
@@ -245,7 +267,8 @@ def _summary(content: str) -> str:
 class Director(Agent):
     def __init__(self, llm: LLMClient, gateway=None,
                  memory=None, journal=None, skills: dict | None = None,
-                 skills_dir: Path | None = None, agent_llm: LLMClient | None = None):
+                 skills_dir: Path | None = None, agent_llm: LLMClient | None = None,
+                 progress=None):
         # Модель временных агентов; без неё они работают на модели Директора.
         agent_llm = agent_llm or llm
 
@@ -258,7 +281,11 @@ class Director(Agent):
 
         library = skills or {}
 
-        async def _spawn(role: str, skills: list[str], task: str) -> dict:
+        async def _plan(title: str, steps: list[str]) -> dict:
+            await progress.plan(self._run_id, title, steps)
+            return {"shown": len(steps)}
+
+        async def _spawn(role: str, skills: list[str], task: str, step: int | None = None) -> dict:
             # библиотеку читаем с инстанса — /reload подменяет её на ходу
             unknown = [s for s in skills if s not in self._library]
             if unknown:
@@ -315,10 +342,20 @@ class Director(Agent):
             # Вывод такого агента вернётся в контекст Директора: всё, что он запишет
             # в память по итогам этой задачи, уходит в карантин (аудит F09).
             self._untrusted_skills.update(s.name for s in chosen if s.untrusted)
-            log.info("spawn", role=role, skills=skills)
+            log.info("spawn", role=role, skills=skills, step=step)
+            tracked = progress is not None and step is not None and progress.has_step(self._run_id, step)
+            if tracked:
+                await progress.started(self._run_id, step, sub.agent_id)
             # Временный агент: не регистрируем в реестре, вызываем напрямую и забываем
             # вместе с контекстом. memory не передаём — истории у него быть не должно.
-            result = await sub.handle(Task(content=task, run_id=self._run_id))
+            try:
+                result = await sub.handle(Task(content=task, run_id=self._run_id))
+            except BaseException:
+                if tracked:
+                    await progress.finished(sub.agent_id, success=False)
+                raise
+            if tracked:
+                await progress.finished(sub.agent_id, success=result.success)
             self._sub_trace.extend(result.trace)
             self._agents_used.append(sub.name)
             return {"agent": sub.name, "result": result.content, "success": result.success}
@@ -378,6 +415,17 @@ class Director(Agent):
         tools = [report_tool, *memory_tools(self._provenance)]
         if library:
             tools.append(spawn_tool)
+        if library and progress is not None:
+            tools.append(Tool(
+                name="plan",
+                description=(
+                    "Show the user a live TODO list of this task in Telegram. Call before the "
+                    "first spawn; call again to revise. Safe."
+                ),
+                params_model=PlanParams,
+                fn=_plan,
+                safety=Safety.SAFE,
+            ))
         if skills_dir is not None:
             tools.append(Tool(
                 name="write_skill",
@@ -409,6 +457,7 @@ class Director(Agent):
                 {n: s.description for n, s in library.items()},
                 with_experience=journal is not None,
                 with_write_skill=skills_dir is not None,
+                with_plan=progress is not None,
             ),
             tools=tools,
             llm=llm,
@@ -419,6 +468,7 @@ class Director(Agent):
         self._skills_dir = skills_dir
         self._base_prompt = self.system_prompt
         self._journal = journal
+        self._progress = progress
         # Задачи Директора идут строго по одной: накопители ниже живут на инстансе,
         # параллельный handle их бы перемешал. Спавнутых агентов замок не касается —
         # они выполняются внутри одной задачи и параллелятся намеренно.
@@ -443,6 +493,7 @@ class Director(Agent):
             {n: s.description for n, s in self._library.items()},
             with_experience=self._journal is not None,
             with_write_skill=self._skills_dir is not None,
+            with_plan=self._progress is not None,
         )
 
     async def handle(self, task: Task) -> Result:
@@ -459,6 +510,8 @@ class Director(Agent):
                 # «Yes to all» живёт до конца ответа — и при ошибке, и при отмене.
                 if self._gateway is not None:
                     self._gateway.release(self._run_id)
+                if self._progress is not None:
+                    await self._progress.finish(self._run_id)
             result.attachment = self._report_path
             if self._journal is not None:
                 await self._write_journal(task, result)

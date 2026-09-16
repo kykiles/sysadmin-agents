@@ -12,6 +12,7 @@ from app.learning.lint import LintState
 from app.learning.review import LearningContext
 from app.bot.bot import create_bot, create_dispatcher, set_bot_commands
 from app.bot.gateway import TelegramConfirmationGateway
+from app.bot.progress import TelegramProgress
 from app.monitoring.state import MonitorState
 from app.monitoring.loop import health_loop, config_from_settings
 
@@ -50,9 +51,10 @@ async def main() -> None:
         journal=journal,
     ) if journal is not None else None
     bot = create_bot()
-    gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id)
+    progress = TelegramProgress(bot, settings.telegram_user_id)
+    gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id, progress=progress)
     director = Director(llm=director_llm, agent_llm=llm, gateway=gateway, memory=history,
-                        journal=journal, skills=skills, skills_dir=skills_dir)
+                        journal=journal, skills=skills, skills_dir=skills_dir, progress=progress)
 
     def reload_library() -> str:
         """Перечитать skills/ без рестарта. Новые скиллы подхватываются сразу;

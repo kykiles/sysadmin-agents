@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     compose_projects_dir: str = Field(default="/opt", alias="COMPOSE_PROJECTS_DIR")
     shell_timeout_seconds: int = Field(default=120, alias="SHELL_TIMEOUT_SECONDS")
+    # compose up --build: сборка образа не укладывается в SHELL_TIMEOUT_SECONDS
+    build_timeout_seconds: int = Field(default=900, alias="BUILD_TIMEOUT_SECONDS")
     agent_max_iterations: int = Field(default=25, alias="AGENT_MAX_ITERATIONS")
     # Вывод инструмента уходит в контекст целиком и остаётся там до конца задачи:
     # один journalctl без -n на 25 итераций переполняет окно и роняет запрос в 400.

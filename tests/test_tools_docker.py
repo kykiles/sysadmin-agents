@@ -146,3 +146,45 @@ async def test_container_missing_reports_404_only():
     broken = _docker_with_show(AsyncMock(side_effect=DockerError(500, {"message": "daemon"})))
     with patch("app.tools.docker.Docker", return_value=broken):
         assert await dk.container_missing({"container": "x"}) is None
+
+
+async def test_compose_up_build_adds_flag_and_long_timeout(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "build_timeout_seconds", 900)
+    run = AsyncMock(return_value={"returncode": 0, "stdout": "", "stderr": ""})
+    with patch("app.tools.docker._run_subprocess", run), \
+            patch("app.tools.docker._project_dir", return_value="/fake/project"):
+        await dk.compose_up(project="web", build=True)
+        assert run.await_args.args[0][-3:] == ["up", "-d", "--build"]
+        assert run.await_args.kwargs["timeout"] == 900
+        await dk.compose_up(project="web")
+        assert run.await_args.args[0][-2:] == ["up", "-d"]
+        assert run.await_args.kwargs["timeout"] is None
+
+
+async def test_container_guard_refuses_own_container_by_name_or_label():
+    own = _docker_with_show(AsyncMock(return_value={"Name": "/sysadmin-agents"}))
+    with patch("app.tools.docker.Docker", return_value=own):
+        assert "самой системы" in await dk.container_guard({"container": "5d34b580498d"})
+    labelled = _docker_with_show(AsyncMock(return_value={
+        "Name": "/renamed", "Config": {"Labels": {"com.docker.compose.project": "sysadmin-agents"}}}))
+    with patch("app.tools.docker.Docker", return_value=labelled):
+        assert "самой системы" in await dk.container_guard({"container": "renamed"})
+    other = _docker_with_show(AsyncMock(return_value={
+        "Name": "/glowshine_bot", "Config": {"Labels": {"com.docker.compose.project": "remnabot"}}}))
+    with patch("app.tools.docker.Docker", return_value=other):
+        assert await dk.container_guard({"container": "glowshine_bot"}) is None
+
+
+async def test_container_guard_still_reports_missing():
+    from aiodocker import DockerError
+
+    missing = _docker_with_show(AsyncMock(side_effect=DockerError(404, {"message": "No such container"})))
+    with patch("app.tools.docker.Docker", return_value=missing):
+        assert "не найден" in await dk.container_guard({"container": "x"})
+
+
+async def test_project_guard_refuses_own_project():
+    assert "самой системы" in await dk.project_guard({"project": "sysadmin-agents"})
+    assert await dk.project_guard({"project": "remnabot"}) is None

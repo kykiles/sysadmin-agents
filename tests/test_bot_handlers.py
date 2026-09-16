@@ -165,7 +165,7 @@ async def test_yes_to_all_callback_grants_scope():
     task, rid = await _pending(gw)
     cb = await _press(_router(gateway=gw), f"cf:{rid}:all")
     assert await task is Decision.APPROVED_ALL
-    assert "Yes to all" in cb.message.edit_text.call_args.args[0]
+    assert "Да, для всех таких" in cb.message.edit_text.call_args.args[0]
     assert gw._grants == {"r1": {"docker_restart: container=bot"}}
 
 

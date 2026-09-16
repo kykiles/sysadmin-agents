@@ -115,7 +115,11 @@ class Agent:
         if decision.approved:
             out = await tool.invoke(prepared)
         else:
-            out = json.dumps({"error": "not approved: rejected, timed out or not delivered"})
+            out = json.dumps({"error": (
+                "not approved: пользователь отказал, не ответил или запрос не доставлен. "
+                "Не повторяй этот вызов — такой же запрос в этой задаче отклоняется без вопроса. "
+                "Заверши работу и сообщи, что действие не выполнено."
+            )}, ensure_ascii=False)
         await audit.record(
             agent=self.name,
             tool=tool.name,

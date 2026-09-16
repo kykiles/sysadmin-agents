@@ -228,3 +228,61 @@ async def test_no_yes_to_all_without_recognisable_scope(req):
     assert not task.done()
     assert gw._grants == {}
     await _stop(task)
+
+
+# ---------- отказ: тот же вызов в том же run больше не спрашивается ----------
+
+async def test_rejected_call_is_not_asked_again_in_same_run():
+    """Живой прогон: после «Нет» агент повторил тот же запрос ещё дважды."""
+    bot = _bot()
+    gw = TelegramConfirmationGateway(bot, chat_id=OWNER, timeout=5)
+    task, rid = await _start(gw, _req("compose_up", project="remnabot"))
+    assert _owner(gw, rid, Decision.REJECTED)
+    assert await task is Decision.REJECTED
+    assert await gw.request(_req("compose_up", project="remnabot")) is Decision.REJECTED
+    assert bot.send_message.await_count == 1
+    # другой вызов спрашивается как обычно
+    other, _ = await _start(gw, _req("compose_up", project="remnabot", build=True))
+    assert bot.send_message.await_count == 2
+    await _stop(other)
+
+
+async def test_timeout_counts_as_refusal_but_undelivered_does_not():
+    bot = _bot()
+    gw = TelegramConfirmationGateway(bot, chat_id=OWNER, timeout=0)
+    assert await gw.request(_req()) is Decision.REJECTED
+    assert await gw.request(_req()) is Decision.REJECTED
+    assert bot.send_message.await_count == 1
+
+    broken = _bot()
+    broken.send_message = AsyncMock(side_effect=[RuntimeError("telegram down"), MagicMock(message_id=MSG_ID)])
+    gw = TelegramConfirmationGateway(broken, chat_id=OWNER, timeout=0)
+    await gw.request(_req())
+    await gw.request(_req())
+    assert broken.send_message.await_count == 2
+
+
+async def test_release_forgets_refusals():
+    bot = _bot()
+    gw = TelegramConfirmationGateway(bot, chat_id=OWNER, timeout=0)
+    await gw.request(_req())
+    gw.release("r1")
+    await gw.request(_req())
+    assert bot.send_message.await_count == 2
+
+
+async def test_progress_marks_waiting_while_human_decides():
+    progress = MagicMock()
+    progress.waiting = AsyncMock()
+    gw = TelegramConfirmationGateway(_bot(), chat_id=OWNER, timeout=5, progress=progress)
+    task, rid = await _start(gw)
+    progress.waiting.assert_awaited_once_with("a#1", True)
+    assert _owner(gw, rid)
+    await task
+    assert progress.waiting.await_args_list[-1].args == ("a#1", False)
+    progress.refused.assert_not_called()
+
+    task, rid = await _start(gw)
+    assert _owner(gw, rid, Decision.REJECTED)
+    await task
+    progress.refused.assert_called_once_with("a#1")

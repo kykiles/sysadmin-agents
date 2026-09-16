@@ -1,4 +1,5 @@
 import asyncio
+import json
 import secrets
 from dataclasses import dataclass
 
@@ -38,15 +39,21 @@ class TelegramConfirmationGateway:
     «Yes to all» разрешает вызовы с тем же scope (инструмент + цель + программа)
     только внутри того же run и только до release(run_id) — Директор зовёт его,
     закончив ответ. Сотня одинаковых кнопок подряд приучала жать не читая.
+
+    Отказ (кнопка «Нет» или молчание до таймаута) симметричен: тот же вызов в том же
+    run отклоняется без повторного вопроса. Агент после «Нет» спрашивал ещё дважды.
     """
 
-    def __init__(self, bot: Bot, chat_id: int, timeout: int | None = None):
+    def __init__(self, bot: Bot, chat_id: int, timeout: int | None = None, progress=None):
         self._bot = bot
+        # TODO-лист задачи: пока человек решает, пункт агента помечен «ждёт подтверждения»
+        self._progress = progress
         # Личный чат с владельцем: его id совпадает с id пользователя.
         self._chat_id = chat_id
         self._timeout = timeout if timeout is not None else settings.confirmation_timeout_seconds
         self._pending: dict[str, _Pending] = {}
         self._grants: dict[str, set[str]] = {}
+        self._denied: dict[str, set[str]] = {}
 
     def resolve(self, request_id: str, decision: Decision, *, user_id: int,
                 chat_id: int, message_id: int) -> bool:
@@ -68,14 +75,27 @@ class TelegramConfirmationGateway:
         return True
 
     def release(self, run_id: str) -> None:
-        """Ответ готов: «Yes to all» этого run больше ничего не разрешает."""
+        """Ответ готов: «Yes to all» и отказы этого run больше ничего не решают."""
         self._grants.pop(run_id, None)
+        self._denied.pop(run_id, None)
 
     async def request(self, req: ConfirmationRequest) -> Decision:
+        decision = await self._ask(req)
+        # Агент после отказа завершается «успешно», но действие не выполнено:
+        # без этой отметки пункт TODO-листа получал ✅.
+        if decision is Decision.REJECTED and self._progress is not None:
+            self._progress.refused(req.agent_id)
+        return decision
+
+    async def _ask(self, req: ConfirmationRequest) -> Decision:
         scope = req.scope()
         if scope is not None and scope in self._grants.get(req.run_id, ()):
             log.info("confirmation_granted", tool=req.tool_name, scope=scope, run_id=req.run_id)
             return Decision.AUTO_APPROVED
+        call = f"{req.tool_name}:{json.dumps(req.args, sort_keys=True, default=str)}"
+        if call in self._denied.get(req.run_id, ()):
+            log.info("confirmation_denied_again", tool=req.tool_name, run_id=req.run_id)
+            return Decision.REJECTED
         request_id = secrets.token_urlsafe(9)
         details = confirmation_details(req)
         text = format_confirmation(req, request_id, details)
@@ -86,7 +106,7 @@ class TelegramConfirmationGateway:
                 await self._bot.send_document(
                     self._chat_id,
                     BufferedInputFile(details.encode("utf-8"), filename=f"confirm-{request_id}.txt"),
-                    caption=f"Запрос {request_id}: полный текст. Исполнен будет ровно он.",
+                    caption=f"Полный текст действия на подтверждение (запрос {request_id}). Выполнено будет ровно оно.",
                 )
                 text = format_confirmation(req, request_id, details, attached=True)
             msg = await self._bot.send_message(
@@ -102,10 +122,17 @@ class TelegramConfirmationGateway:
             fut, self._chat_id, self._chat_id, msg.message_id, loop.time() + self._timeout,
             req.run_id, scope,
         )
+        if self._progress is not None:
+            await self._progress.waiting(req.agent_id, True)
         try:
-            return await asyncio.wait_for(fut, timeout=self._timeout)
+            decision = await asyncio.wait_for(fut, timeout=self._timeout)
         except asyncio.TimeoutError:
-            return Decision.REJECTED
+            decision = Decision.REJECTED
         finally:
             # и при отмене родителя: ждущий запрос не переживает свою корутину
             self._pending.pop(request_id, None)
+            if self._progress is not None:
+                await self._progress.waiting(req.agent_id, False)
+        if decision is Decision.REJECTED:
+            self._denied.setdefault(req.run_id, set()).add(call)
+        return decision

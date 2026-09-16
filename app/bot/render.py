@@ -117,20 +117,82 @@ def confirmation_details(req: ConfirmationRequest) -> str:
     return redact("\n".join(lines))
 
 
-def format_confirmation(req: ConfirmationRequest, request_id: str, details: str,
-                        attached: bool = False) -> str:
-    lines = ["<b>Требуется подтверждение</b>"]
+_RW_ACTIONS = {
+    "user-extend": "продлена подписка пользователя",
+    "user-enable": "включён пользователь",
+    "user-disable": "приостановлен доступ пользователя",
+    "user-revoke": "отозвана подписка (новые ключи и ссылка) пользователя",
+    "user-reset-traffic": "обнулён трафик пользователя",
+    "hwid-reset": "сброшены устройства пользователя",
+}
+_HTTP_ACTIONS = {"POST": "создание или действие", "PATCH": "изменение", "PUT": "изменение",
+                 "DELETE": "удаление"}
+
+
+def _rw_action(a: dict) -> str:
+    args = a.get("args") or []
+    what = _RW_ACTIONS.get(a.get("script"), f"выполнено действие «{a.get('script')}» для пользователя")
+    days = f" на {args[1]} дн." if a.get("script") == "user-extend" and len(args) > 1 else ""
+    return f"Сейчас в панели Remnawave будет {what} «{args[0] if args else '?'}»{days}."
+
+
+# Фраза пишется кодом по аргументам, а не моделью: в живом прогоне модель назвала
+# «пересборкой» вызов, который образ не пересобирал. Второй элемент — исполняет ли
+# инструмент произвольную команду: тогда рядом показываем пояснение агента, помеченное
+# как его слова, — из аргументов смысл такой команды не пересказать.
+_ACTIONS: dict[str, tuple] = {
+    "docker_restart": (lambda a: f"Сейчас будет перезапущен Docker-контейнер «{a['container']}».", False),
+    "docker_stop": (lambda a: f"Сейчас будет остановлен Docker-контейнер «{a['container']}».", False),
+    "docker_start": (lambda a: f"Сейчас будет запущен Docker-контейнер «{a['container']}».", False),
+    "compose_up": (lambda a: (
+        f"Сейчас будет пересобран образ и перезапущено приложение «{a['project']}»."
+        if a.get("build") else
+        f"Сейчас будет запущено приложение «{a['project']}» на текущем образе, без пересборки."
+    ), False),
+    "compose_down": (lambda a: f"Сейчас будет остановлено приложение «{a['project']}»: "
+                               "контейнеры удалятся, данные в томах останутся.", False),
+    "deploy_run": (lambda a: f"Сейчас будет выполнен деплой сайта «{a['site']}».", False),
+    "rw_action": (_rw_action, False),
+    "rw_curl_write": (lambda a: "Сейчас в панели Remnawave будет "
+                                f"{_HTTP_ACTIONS.get(str(a.get('method')).upper(), 'изменение')} данных.", True),
+    "write_skill": (lambda a: f"Сейчас будет сохранён новый навык «{a['name']}»: {a.get('description', '')}", False),
+    "docker_exec": (lambda a: f"Сейчас внутри Docker-контейнера «{a['container']}» будет выполнена команда.", True),
+    "docker_query": (lambda a: f"Сейчас будет выполнен запрос к базе данных в контейнере «{a['container']}».", True),
+    "shell_exec": (lambda a: "Сейчас на этом сервере будет выполнена команда.", True),
+    "ssh_exec": (lambda a: f"Сейчас на сервере «{a['host']}» будет выполнена команда.", True),
+    "run_skill_script": (lambda a: f"Сейчас будет запущен скрипт навыка «{a['skill']}».", True),
+}
+
+
+def plain_action(req: ConfirmationRequest) -> str:
+    """Что произойдёт — обычным языком, для человека без знания команд."""
+    phrase, opaque = _ACTIONS.get(req.tool_name, (None, True))
+    try:
+        text = phrase(req.args) if phrase else f"Сейчас будет выполнено действие «{req.tool_name}»."
+    except (KeyError, IndexError, TypeError):
+        text = f"Сейчас будет выполнено действие «{req.tool_name}»."
     reason = (req.reason or "").strip()
-    if reason:
+    if opaque and reason:
         if len(reason) > _REASON_LIMIT:
             reason = reason[:_REASON_LIMIT] + " …"
-        lines.append(html.escape(reason))
-    if attached:
-        lines.append(f"<blockquote expandable>{html.escape(details[:_PREVIEW_LIMIT])} …</blockquote>")
-        lines.append(f"Полный запрос ({len(details)} символов) — в файле выше; исполнен будет ровно он.")
-    else:
-        lines.append(f"<blockquote expandable>{html.escape(details)}</blockquote>")
+        text += f"\nПояснение агента: {reason}"
+    return redact(text)
+
+
+def format_confirmation(req: ConfirmationRequest, request_id: str, details: str,
+                        attached: bool = False) -> str:
+    """Сверху — фраза обычным языком. Команда и аргументы — в свёрнутом блоке: исполнено
+    будет ровно то, что в нём, поэтому убрать его совсем нельзя (аудит F05)."""
+    lines = [html.escape(plain_action(req)), "Требуется ваше подтверждение."]
+    tech = f"Подробности для проверки\n\n{details}" if not attached else (
+        f"Подробности для проверки\n\n{details[:_PREVIEW_LIMIT]} …\n\n"
+        f"Полный текст ({len(details)} символов) — в файле выше; выполнено будет ровно оно."
+    )
     if scope := req.scope():
-        lines.append(f"Yes to all — без вопросов до конца этого ответа: <code>{html.escape(redact(scope))}</code>")
-    lines.append(f"Запрос: <code>{request_id}</code>")
+        tech += f"\n«Да, для всех таких» разрешит: {redact(scope)}"
+    tech += f"\nзапрос: {request_id}"
+    lines.append(f"<blockquote expandable>{html.escape(tech)}</blockquote>")
+    if scope:
+        lines.append("«Да, для всех таких» — такие же действия до конца этой задачи "
+                     "выполнятся без вопроса.")
     return "\n\n".join(lines)

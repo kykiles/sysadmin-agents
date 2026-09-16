@@ -14,10 +14,11 @@ def _text(req, rid="RID123"):
 def test_shell_command_rendered_in_blockquote():
     req = _req(command=["rm", "-rf", "/var/log/old"], reason="Освобождаю место — удаляю старые логи.")
     text = _text(req)
-    assert "<b>Требуется подтверждение</b>" in text
-    assert "Освобождаю место — удаляю старые логи." in text
+    assert text.startswith("Сейчас на этом сервере будет выполнена команда.\n"
+                           "Пояснение агента: Освобождаю место — удаляю старые логи.")
+    assert "Требуется ваше подтверждение." in text
     assert "инструмент: shell_exec\ncommand: rm -rf /var/log/old" in text
-    assert "<code>RID123</code>" in text
+    assert "запрос: RID123" in text
 
 
 def test_every_argument_is_shown_without_reason():
@@ -65,3 +66,47 @@ def test_secret_in_args_is_not_shown(monkeypatch):
     text = _text(_req("rw_curl_write", body={"token": "AUDIT_FAKE_SECRET"}, method="POST", path="/x"))
     assert "AUDIT_FAKE_SECRET" not in text
     assert "&lt;redacted&gt;" in text
+
+
+# ---------- фраза обычным языком ----------
+
+def _plain_part(text):
+    """Всё, что видно без раскрытия свёрнутого блока."""
+    return text.split("<blockquote expandable>")[0]
+
+
+def test_known_tool_is_described_by_code_not_by_model():
+    """Живой прогон: модель назвала «пересборкой» вызов compose_up без --build."""
+    text = _text(_req("compose_up", reason="Пересоберу образ бота.", project="remnabot", build=False))
+    plain = _plain_part(text)
+    assert "без пересборки" in plain
+    assert "Пересоберу" not in text
+    assert "compose_up" not in plain and "project" not in plain
+
+
+def test_rebuild_phrase():
+    plain = _plain_part(_text(_req("compose_up", project="remnabot", build=True)))
+    assert plain.startswith("Сейчас будет пересобран образ и перезапущено приложение «remnabot».")
+
+
+def test_container_restart_phrase_and_details_collapsed():
+    text = _text(_req("docker_restart", container="glowshine_bot"))
+    assert _plain_part(text) == ("Сейчас будет перезапущен Docker-контейнер «glowshine_bot».\n\n"
+                                 "Требуется ваше подтверждение.\n\n")
+    assert "Подробности для проверки" in text and "инструмент: docker_restart" in text
+
+
+def test_rw_action_phrase():
+    plain = _plain_part(_text(_req("rw_action", script="user-extend", args=["42", "30"])))
+    assert "продлена подписка пользователя «42» на 30 дн." in plain
+
+
+def test_unknown_tool_falls_back_to_name_and_model_reason():
+    plain = _plain_part(_text(_req("mcp_create_issue", reason="Заведу задачу в трекере.", title="x")))
+    assert "«mcp_create_issue»" in plain
+    assert "Пояснение агента: Заведу задачу в трекере." in plain
+
+
+def test_malformed_args_do_not_break_phrase():
+    plain = _plain_part(_text(_req("docker_restart")))
+    assert "«docker_restart»" in plain

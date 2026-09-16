@@ -186,7 +186,7 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         if not resolved:
             await callback.answer("Запрос устарел или уже решён — ничего не выполнено")
             return
-        label = {"yes": "Yes", "all": "Yes to all", "no": "No"}[choice]
+        label = {"yes": "Да", "all": "Да, для всех таких", "no": "Нет"}[choice]
         await callback.answer(label)
         # Запрос уже погашен: не удалось убрать кнопки — повторное нажатие всё равно
         # ничего не решит. html_text сохраняет разметку исходного сообщения.

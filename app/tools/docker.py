@@ -34,6 +34,11 @@ class ProjectParams(BaseModel):
     project: str = Field(description="compose project dir name under COMPOSE_PROJECTS_DIR")
 
 
+class ComposeUpParams(ProjectParams):
+    build: bool = Field(default=False, description="rebuild images before starting (--build); "
+                                                   "without it the old image is reused")
+
+
 # ---------- projections (keep LLM context small) ----------
 
 def _project_container(c: dict) -> dict:
@@ -105,16 +110,46 @@ async def docker_inspect(container: str) -> dict:
 
 # ---------- dangerous docker api ----------
 
-async def container_missing(args: dict) -> str | None:
-    """precheck опасных вызовов в контейнере: нет контейнера — нечего и подтверждать.
-    Другие сбои Docker не решают за человека — запрос уйдёт как обычно."""
+async def _show_or_missing(container: str) -> tuple[dict | None, str | None]:
+    """inspect контейнера и причина отказа, если его нет. Другие сбои Docker не решают
+    за человека — (None, None), и запрос уйдёт как обычно."""
     async with Docker() as docker:
         try:
-            await docker.containers.container(args["container"]).show()
+            return await docker.containers.container(container).show(), None
         except DockerError as e:
             if e.status == 404:
-                return f"контейнер {args['container']} не найден — имена даёт docker_ps"
+                return None, f"контейнер {container} не найден — имена даёт docker_ps"
+    return None, None
+
+
+async def container_missing(args: dict) -> str | None:
+    """precheck опасных вызовов в контейнере: нет контейнера — нечего и подтверждать."""
+    return (await _show_or_missing(args["container"]))[1]
+
+
+# Контейнер и compose-проект самой системы (container_name и каталог в docker-compose.yml).
+SELF_NAME = "sysadmin-agents"
+_SELF_REFUSAL = (
+    "это контейнер самой системы агентов: изнутри его не перезапустить и не пересобрать — "
+    "задача оборвётся без ответа, а после stop он не поднимется сам. Скажи пользователю, "
+    "что это делается снаружи, по SSH"
+)
+
+
+async def container_guard(args: dict) -> str | None:
+    """precheck restart/stop: вдобавок к отсутствию — отказ для собственного контейнера."""
+    info, missing = await _show_or_missing(args["container"])
+    if missing:
+        return missing
+    labels = ((info or {}).get("Config") or {}).get("Labels") or {}
+    if (info or {}).get("Name") == f"/{SELF_NAME}" or labels.get("com.docker.compose.project") == SELF_NAME:
+        return f"{args['container']}: {_SELF_REFUSAL}"
     return None
+
+
+async def project_guard(args: dict) -> str | None:
+    """precheck compose up/down: отказ для собственного проекта."""
+    return f"{args['project']}: {_SELF_REFUSAL}" if args["project"] == SELF_NAME else None
 
 
 async def docker_restart(container: str) -> dict:
@@ -218,10 +253,10 @@ def _project_dir(project: str) -> str:
     return os.path.join(settings.compose_projects_dir, project)
 
 
-async def _compose(project: str, *args: str) -> dict:
+async def _compose(project: str, *args: str, timeout: float | None = None) -> dict:
     pd = _project_dir(project)
     cmd = ["docker", "compose", "--project-directory", pd, "-f", os.path.join(pd, "docker-compose.yml"), *args]
-    res = await _run_subprocess(cmd)
+    res = await _run_subprocess(cmd, timeout=timeout)
     return {
         "project": project,
         "command": list(args),
@@ -245,7 +280,10 @@ async def compose_ps(project: str) -> dict:
     return await _compose(project, "ps", "--format", "json")
 
 
-async def compose_up(project: str) -> dict:
+async def compose_up(project: str, build: bool = False) -> dict:
+    if build:
+        # сборка образа идёт минутами — общий таймаут команд убил бы клиент посреди неё
+        return await _compose(project, "up", "-d", "--build", timeout=settings.build_timeout_seconds)
     return await _compose(project, "up", "-d")
 
 
