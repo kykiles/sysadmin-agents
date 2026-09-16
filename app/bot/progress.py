@@ -79,6 +79,15 @@ class TelegramProgress:
         board = self._boards.get(run_id)
         return [s.text for s in board.steps] if board else None
 
+    def unmarked(self, agent_id: str) -> list[int]:
+        """Номера (с 1) пунктов агента, которые он так и не отметил."""
+        run_id, indices = self._agents.get(agent_id, ("", []))
+        board = self._boards.get(run_id)
+        if board is None:
+            return []
+        return [i + 1 for i in indices
+                if i < len(board.steps) and board.steps[i].status == "pending"]
+
     async def started(self, run_id: str, steps: list[int], agent_id: str) -> None:
         """steps — номера пунктов с 1."""
         board = self._boards.get(run_id)

@@ -459,6 +459,8 @@ async def test_agent_marks_plan_steps_itself(tmp_path):
     agent_llm = FakeLLM([
         _call("mark_step", {"step": 1, "status": "done"}),
         ChoiceMessage(content="написал", tool_calls=None),
+        # напоминание про пункт 2 — агент снова не отметил
+        ChoiceMessage(content="всё написал", tool_calls=None),
     ])
     d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
     await d.handle(Task(content="пост"))
@@ -474,6 +476,77 @@ async def test_agent_marks_plan_steps_itself(tmp_path):
     (sub,) = agent_llm.seen[:1]
     assert "1. Написать пост\n2. Проверить" in sub[0]["content"]
     assert "mark_step" in [t["function"]["name"] for t in agent_llm.seen_tools[0]]
+
+
+async def test_agent_that_forgot_marks_gets_one_reminder_turn(tmp_path):
+    """Прод 16.09: deepseek-v4-flash сделал работу, но mark_step не вызвал — пункты
+    ушли в «пропущен». Один ход только с mark_step; ответ агента не пишется заново."""
+    facts.init_store(str(tmp_path / "f.db"))
+    progress, bot = _progress_bot()
+    director_llm = FakeLLM([
+        _call("plan", {"title": "Пост", "steps": ["Написать пост", "Проверить"]}),
+        _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши", "steps": [1, 2]}),
+        ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    agent_llm = FakeLLM([
+        _call("echo", {"text": "пост"}),
+        ChoiceMessage(content="написал и проверил", tool_calls=None),
+        ChoiceMessage(content="отмечаю", tool_calls=[
+            ToolCall(id="m1", function=ToolCallFunction(
+                name="mark_step", arguments=json.dumps({"step": 1, "status": "done"}))),
+            ToolCall(id="m2", function=ToolCallFunction(
+                name="mark_step", arguments=json.dumps({"step": 2, "status": "done"}))),
+            # в ходе-напоминании работа не продолжается
+            ToolCall(id="e1", function=ToolCallFunction(
+                name="echo", arguments=json.dumps({"text": "ещё"}))),
+        ]),
+    ])
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    await d.handle(Task(content="пост"))
+
+    last = bot.edit_message_text.await_args_list[-1].args[0]
+    assert last == "<b>Пост</b>\n\n<s>1. Написать пост</s>\n<s>2. Проверить</s>"
+    assert [t["function"]["name"] for t in agent_llm.seen_tools[-1]] == ["mark_step"]
+    assert "1, 2" in agent_llm.seen[-1][-1]["content"]
+    spawn_out = [m["content"] for m in director_llm.seen[-1] if m["role"] == "tool"][-1]
+    assert "написал и проверил" in spawn_out and "отмечаю" not in spawn_out
+    assert d._sub_trace.count("echo") == 1
+
+
+async def test_failed_reminder_keeps_agent_result(tmp_path):
+    facts.init_store(str(tmp_path / "f.db"))
+    progress, _ = _progress_bot()
+    director_llm = FakeLLM([
+        _call("plan", {"title": "Пост", "steps": ["Написать пост"]}),
+        _call("spawn", {"role": "к", "skills": ["writer"], "task": "напиши", "steps": [1]}),
+        ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    # второго ответа нет — ход-напоминание падает
+    agent_llm = FakeLLM([ChoiceMessage(content="написал", tool_calls=None)])
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    res = await d.handle(Task(content="пост"))
+
+    assert res.content == "Готово."
+    spawn_out = [m["content"] for m in director_llm.seen[-1] if m["role"] == "tool"][-1]
+    assert "написал" in spawn_out
+
+
+async def test_no_reminder_when_agent_marked_everything(tmp_path):
+    facts.init_store(str(tmp_path / "f.db"))
+    progress, _ = _progress_bot()
+    director_llm = FakeLLM([
+        _call("plan", {"title": "Пост", "steps": ["Написать пост"]}),
+        _call("spawn", {"role": "к", "skills": ["writer"], "task": "напиши", "steps": [1]}),
+        ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    agent_llm = FakeLLM([
+        _call("mark_step", {"step": 1, "status": "done"}),
+        ChoiceMessage(content="написал", tool_calls=None),
+    ])
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    await d.handle(Task(content="пост"))
+
+    assert len(agent_llm.seen) == 2
 
 
 async def test_spawn_without_steps_is_refused_when_plan_exists(tmp_path):

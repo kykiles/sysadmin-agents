@@ -308,6 +308,31 @@ class Director(Agent):
             await progress.plan(self._run_id, title, steps)
             return {"shown": len(steps)}
 
+        async def _remind_marks(sub: Agent, result, left: list[int]) -> None:
+            """Прод 16.09: агенты на дешёвой модели делали работу, но mark_step не
+            звали — просьба в конце промпта тонет за двадцатью вызовами, и пункты
+            уходили в «пропущен». Один ход, где кроме mark_step ничего нет; ответ
+            агента остаётся прежним, текст этого хода не нужен."""
+            log.info("mark_step_reminder", agent=sub.name, steps=left)
+            mark = sub._find_tool("mark_step")
+            # Список — подсказка: сбой этого хода не должен выбросить готовую работу агента.
+            try:
+                msg = await agent_llm.chat(
+                    [*result.transcript, {"role": "user", "content": (
+                        f"Ты не отметил пункты плана {', '.join(map(str, left))}. Отметь каждый "
+                        "mark_step: \"done\" — выполнен, \"failed\" — не удался, \"skipped\" — "
+                        "не понадобился. Ответ заново не пиши."
+                    )}],
+                    [mark.schema()],
+                )
+            except Exception:
+                log.warning("mark_step_reminder_failed", agent=sub.name)
+                return
+            for tc in msg.tool_calls or []:
+                if tc.function.name == "mark_step":
+                    result.trace.append("mark_step")
+                    await sub._run_safe(tc)
+
         async def _spawn(role: str, skills: list[str], task: str, steps: list[int] | None = None) -> dict:
             # библиотеку читаем с инстанса — /reload подменяет её на ходу
             unknown = [s for s in skills if s not in self._library]
@@ -393,6 +418,8 @@ class Director(Agent):
             # вместе с контекстом. memory не передаём — истории у него быть не должно.
             try:
                 result = await sub.handle(Task(content=task, run_id=self._run_id))
+                if plan is not None and (left := progress.unmarked(sub.agent_id)):
+                    await _remind_marks(sub, result, left)
             finally:
                 if plan is not None:
                     await progress.finished(sub.agent_id)
