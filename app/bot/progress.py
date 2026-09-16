@@ -2,9 +2,12 @@
 
 Пункты пишет Директор инструментом plan и раздаёт их агентам в spawn(steps=...).
 Выполнение отмечает сам агент (mark_step): он знает, что сделал, а код видит только
-«агент закончил» — автоматическая ✅ по этому признаку врала после отказа в
-подтверждении. Код ставит то, что знает точно: пункт в работе, ждёт подтверждения,
-пользователь отказал. В конце задачи неотмеченный пункт получает ➖.
+«агент закончил» — автоматическая отметка «выполнен» по этому признаку врала после
+отказа в подтверждении. Код ставит то, что знает точно: пункт в работе, ждёт
+подтверждения, пользователь отказал. В конце задачи неотмеченный пункт — «пропущен».
+
+Вид без эмодзи: пункты пронумерованы, выполненный зачёркнут, остальные состояния —
+подписью курсивом после пункта.
 """
 import asyncio
 import html
@@ -14,7 +17,7 @@ from app.logging import get_logger
 
 log = get_logger("progress")
 
-_MARKS = {"done": "✅", "failed": "❌", "skipped": "➖"}
+_NOTES = {"failed": "не выполнено", "skipped": "пропущен"}
 
 
 @dataclass
@@ -25,13 +28,15 @@ class _Step:
     active: int = 0
     waiting: int = 0
 
-    def render(self) -> str:
-        text = html.escape(self.text)
+    def render(self, number: int) -> str:
+        line = f"{number}. {html.escape(self.text)}"
         if self.waiting:
-            return f"⏳ {text}\n      <i>ждёт вашего подтверждения</i>"
-        if self.status in _MARKS:
-            return f"{_MARKS[self.status]} {text}"
-        return f"{'⏳' if self.active else '⬜'} {text}"
+            note = "ждёт вашего подтверждения"
+        elif self.status == "done":
+            return f"<s>{line}</s>"
+        else:
+            note = _NOTES.get(self.status) or ("в работе" if self.active else "")
+        return f"{line} — <i>{note}</i>" if note else line
 
 
 @dataclass
@@ -112,7 +117,7 @@ class TelegramProgress:
         return {"marked": step, "status": status}
 
     async def refused(self, agent_id: str) -> None:
-        """Отказ в подтверждении — факт, а не мнение агента: его текущий пункт ❌."""
+        """Отказ в подтверждении — факт, а не мнение агента: его текущий пункт не выполнен."""
         found = self._current(agent_id)
         if found is None:
             return
@@ -131,8 +136,9 @@ class TelegramProgress:
         await self._show(board)
 
     async def finish(self, run_id: str) -> None:
-        """Задача закончилась. Неотмеченный пункт: ❌, если на нём остался работающий
-        агент (задача упала или её отменили), иначе ➖ — его никто не выполнил."""
+        """Задача закончилась. Неотмеченный пункт: «не выполнено», если на нём остался
+        работающий агент (задача упала или её отменили), иначе «пропущен» — его никто
+        не выполнил."""
         board = self._boards.pop(run_id, None)
         mine = {a for a, (r, _) in self._agents.items() if r == run_id}
         self._agents = {a: v for a, v in self._agents.items() if a not in mine}
@@ -161,7 +167,8 @@ class TelegramProgress:
     async def _show(self, board: _Board) -> None:
         async with self._lock:
             # текст — под замком: иначе медленная правка затёрла бы более свежую
-            text = f"<b>{html.escape(board.title)}</b>\n\n" + "\n".join(s.render() for s in board.steps)
+            text = f"<b>{html.escape(board.title)}</b>\n\n" + "\n".join(
+                s.render(n) for n, s in enumerate(board.steps, 1))
             if text == board.shown:
                 return
             # Список — подсказка, а не часть задачи: сбой Telegram её не роняет.

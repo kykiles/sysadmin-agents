@@ -315,7 +315,7 @@ class Director(Agent):
                 return {"error": f"неизвестные навыки: {unknown}", "available": list(self._library)}
             plan = progress.steps(self._run_id) if progress is not None else None
             steps = sorted(set(steps or []))
-            # Без номеров пункты агента некому отметить, и они висят ⬜ — поэтому не просьба
+            # Без номеров пункты агента некому отметить, и они висят неотмеченными — поэтому не просьба
             # в промпте, а отказ: Директор исправит вызов.
             if plan is not None and (not steps or not all(1 <= n <= len(plan) for n in steps)):
                 return {"error": "укажи steps — номера пунктов плана, которые выполняет агент",

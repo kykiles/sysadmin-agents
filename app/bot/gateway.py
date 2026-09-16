@@ -82,7 +82,7 @@ class TelegramConfirmationGateway:
     async def request(self, req: ConfirmationRequest) -> Decision:
         decision = await self._ask(req)
         # Агент после отказа завершается «успешно», но действие не выполнено:
-        # без этой отметки пункт TODO-листа получал ✅.
+        # без этой отметки пункт TODO-листа выглядел выполненным.
         if decision is Decision.REJECTED and self._progress is not None:
             await self._progress.refused(req.agent_id)
         return decision

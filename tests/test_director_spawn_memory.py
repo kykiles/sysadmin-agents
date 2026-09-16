@@ -464,10 +464,10 @@ async def test_agent_marks_plan_steps_itself(tmp_path):
     await d.handle(Task(content="пост"))
 
     shown = [c.args[0] for c in bot.edit_message_text.await_args_list]
-    assert shown == ["<b>Пост</b>\n\n⏳ Написать пост\n⏳ Проверить",
-                     "<b>Пост</b>\n\n✅ Написать пост\n⏳ Проверить",
-                     "<b>Пост</b>\n\n✅ Написать пост\n⬜ Проверить",
-                     "<b>Пост</b>\n\n✅ Написать пост\n➖ Проверить"]
+    assert shown == ["<b>Пост</b>\n\n1. Написать пост — <i>в работе</i>\n2. Проверить — <i>в работе</i>",
+                     "<b>Пост</b>\n\n<s>1. Написать пост</s>\n2. Проверить — <i>в работе</i>",
+                     "<b>Пост</b>\n\n<s>1. Написать пост</s>\n2. Проверить",
+                     "<b>Пост</b>\n\n<s>1. Написать пост</s>\n2. Проверить — <i>пропущен</i>"]
     assert progress._boards == {}
     assert "plan" in [t["function"]["name"] for t in director_llm.seen_tools[0]]
     # пункты агента — в его промпте, mark_step — в его инструментах
