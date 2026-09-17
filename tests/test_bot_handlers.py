@@ -210,7 +210,7 @@ async def test_forget_fact_callback_owner(monkeypatch):
 # ---------- кнопки карантина памяти: одобряется ровно показанная версия (аудит F09) ----------
 
 def _quarantine(tmp_path):
-    from app.memory.facts import KnowledgeStore
+    from agent_memory.facts import KnowledgeStore
     learning = MagicMock()
     learning.facts = KnowledgeStore(str(tmp_path / "f.db"))
     learning.facts.remember("net", "asn", "AS100")

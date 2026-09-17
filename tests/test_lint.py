@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from app.learning.lint import LintState, find_stale
-from app.memory.facts import KnowledgeStore
+from agent_memory.lint import LintState, find_stale
+from agent_memory.facts import KnowledgeStore
 
 NOW = datetime(2026, 7, 19, tzinfo=timezone.utc)
 DEFAULTS = dict(stable_days=90, snapshot_days=14, remind_days=30, max_items=10)

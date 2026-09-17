@@ -5,10 +5,10 @@ from app.logging import setup_logging, get_logger
 from app.llm.client import LLMClient
 from app.agents.director import Director
 from app.skills.loader import load_all_skills
+from agent_memory.facts import KnowledgeStore
+from agent_memory.journal import TaskJournal
+from agent_memory.lint import LintState
 from app.memory.history import DialogHistory
-from app.memory.facts import init_store, get_store
-from app.memory.journal import TaskJournal
-from app.learning.lint import LintState
 from app.learning.review import LearningContext
 from app.bot.bot import create_bot, create_dispatcher, set_bot_commands
 from app.bot.gateway import TelegramConfirmationGateway
@@ -35,7 +35,7 @@ async def main() -> None:
     # Библиотека скилов лежит рядом с пакетом, а не внутри него: ядро не знает,
     # из какой предметной области будут задачи.
     skills_dir = Path(__file__).resolve().parent.parent / "skills"
-    init_store(settings.dialog_db_path)
+    facts = KnowledgeStore(settings.dialog_db_path)
     skills = load_all_skills(skills_dir)
     history = DialogHistory(
         db_path=settings.dialog_db_path,
@@ -45,7 +45,7 @@ async def main() -> None:
     )
     journal = TaskJournal(settings.journal_db_path) if settings.journal_enabled else None
     learning = LearningContext(
-        facts=get_store(),
+        facts=facts,
         lint=LintState(settings.journal_db_path),
         llm=llm,
         journal=journal,
@@ -54,7 +54,8 @@ async def main() -> None:
     progress = TelegramProgress(bot, settings.telegram_user_id)
     gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id, progress=progress)
     director = Director(llm=director_llm, agent_llm=llm, gateway=gateway, memory=history,
-                        journal=journal, skills=skills, skills_dir=skills_dir, progress=progress)
+                        journal=journal, skills=skills, skills_dir=skills_dir,
+                        progress=progress, facts=facts)
 
     def reload_library() -> str:
         """Перечитать skills/ без рестарта. Новые скиллы подхватываются сразу;

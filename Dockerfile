@@ -14,6 +14,7 @@ COPY pyproject.toml ./
 RUN pip install --no-cache-dir .
 
 COPY app ./app
+COPY agent_memory ./agent_memory
 COPY skills ./skills
 COPY .env.example ./
 

@@ -11,10 +11,20 @@
 десятки тысяч токенов там, где хватает двух строк на задачу.
 """
 import json
+import logging
+from typing import Any, Protocol
 
-from app.logging import get_logger
+from agent_memory.facts import KnowledgeStore
+from agent_memory.journal import TaskJournal
 
-log = get_logger("learning.consolidate")
+log = logging.getLogger(__name__)
+
+
+class LLM(Protocol):
+    """Всё, что модулю нужно от модели: один ход без инструментов."""
+
+    async def chat(self, messages: list[dict]) -> Any: ...
+
 
 _PROMPT = (
     "Ты разбираешь журнал работы админской системы за прошедшие сутки и решаешь, "
@@ -62,7 +72,8 @@ def _parse(content: str, limit: int) -> list[dict]:
     return out
 
 
-async def propose(llm, journal, facts, *, hours: int, limit: int) -> list[dict]:
+async def propose(llm: LLM, journal: TaskJournal, facts: KnowledgeStore, *,
+                  hours: int, limit: int) -> list[dict]:
     """Что стоило бы помнить по итогам последних `hours` часов. Ничего не пишет."""
     tasks = journal.recent_with_summary(hours)
     if not tasks:

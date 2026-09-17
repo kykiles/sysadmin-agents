@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.agents.director import Director
 from app.agents.messages import Task
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
-from app.memory.journal import TaskJournal
+from agent_memory.journal import TaskJournal
 from app.skills.loader import Skill
 from app.tools.base import Tool, Safety
 

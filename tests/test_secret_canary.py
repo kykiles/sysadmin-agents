@@ -9,9 +9,9 @@ from app.agents.director import Director
 from app.agents.messages import Decision, Task
 from app.config import settings
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
-from app.memory import facts
+from agent_memory.facts import KnowledgeStore
 from app.memory.history import DialogHistory
-from app.memory.journal import TaskJournal
+from agent_memory.journal import TaskJournal
 from app.skills.loader import Skill
 from app.tools.base import Safety, Tool
 
@@ -70,11 +70,15 @@ def _library() -> dict[str, Skill]:
 
 
 @pytest.fixture
+def store(tmp_path) -> KnowledgeStore:
+    return KnowledgeStore(str(tmp_path / "facts.db"))
+
+
+@pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "remnawave_api_key", CANARY)
     monkeypatch.setattr(settings, "reports_dir", str(tmp_path / "reports"))
     monkeypatch.setattr(settings, "audit_trail_path", str(tmp_path / "audit.jsonl"))
-    monkeypatch.setattr(facts, "_store", facts.KnowledgeStore(str(tmp_path / "facts.db")))
     return tmp_path
 
 
@@ -84,7 +88,7 @@ def _dump(db) -> list[str]:
         return [repr(conn.execute(f"SELECT * FROM {t}").fetchall()) for t in tables]
 
 
-async def test_tool_result_canary_never_reaches_llm(env):
+async def test_tool_result_canary_never_reaches_llm(env, store):
     """Результат специалиста → его следующий запрос → ответ Директору → запрос Директора."""
     llm = RecordingLLM([
         _call("spawn", {"role": "чтец", "skills": ["panel"], "task": "прочитай ноды"}),
@@ -92,7 +96,8 @@ async def test_tool_result_canary_never_reaches_llm(env):
         ChoiceMessage("ноды прочитаны", None),
         ChoiceMessage("Итог: ноды на месте", None),
     ])
-    result = await Director(llm, skills=_library()).handle(Task(content="что с нодами?"))
+    director = Director(llm, skills=_library(), facts=store)
+    result = await director.handle(Task(content="что с нодами?"))
 
     assert len(llm.requests) == 4
     assert all(CANARY not in r for r in llm.requests)
@@ -100,7 +105,7 @@ async def test_tool_result_canary_never_reaches_llm(env):
     assert CANARY not in result.content
 
 
-async def test_canary_echoed_by_model_is_not_stored(env, capsys):
+async def test_canary_echoed_by_model_is_not_stored(env, store, capsys):
     """Даже если секрет повторила модель — хранилища и ответ его не содержат."""
     history = DialogHistory(str(env / "dialog.db"), limit=20)
     journal = TaskJournal(str(env / "tasks.db"))
@@ -117,7 +122,8 @@ async def test_canary_echoed_by_model_is_not_stored(env, capsys):
         ChoiceMessage(f"сделано {CANARY}", None),
         ChoiceMessage(f"Итог {CANARY}", None),
     ])
-    director = Director(llm, gateway=_Yes(), memory=history, journal=journal, skills=_library())
+    director = Director(llm, gateway=_Yes(), memory=history, journal=journal,
+                        skills=_library(), facts=store)
     result = await director.handle(Task(content=f"мой ключ {CANARY}", chat_id="1"))
 
     reports = list((env / "reports").iterdir())
@@ -131,5 +137,5 @@ async def test_canary_echoed_by_model_is_not_stored(env, capsys):
     ]
     assert all(CANARY not in c for c in channels)
     # сами записи состоялись — секрет в них заменён, а не потерян весь факт
-    assert facts._store.recall(scope="panel")[0]["value"] == "ключ <redacted>"
+    assert store.recall(scope="panel")[0]["value"] == "ключ <redacted>"
     assert json.loads((env / "audit.jsonl").read_text(encoding="utf-8"))["tool"] == "mutate"

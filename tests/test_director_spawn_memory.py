@@ -6,7 +6,7 @@ import pytest
 from app.agents.director import Director, _memory_index
 from app.agents.messages import Task
 from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
-from app.memory import facts
+from agent_memory.facts import KnowledgeStore
 from app.skills.loader import Skill
 from app.tools.base import Tool, Safety
 from pydantic import BaseModel
@@ -44,7 +44,7 @@ def _call(name: str, args: dict) -> ChoiceMessage:
 
 
 async def test_spawn_runs_temporary_agent(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     # Директор спавнит агента, тот вызывает echo и отвечает.
     llm = FakeLLM([
         _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши пост"}),
@@ -52,7 +52,7 @@ async def test_spawn_runs_temporary_agent(tmp_path):
         ChoiceMessage(content="готово", tool_calls=None),
         ChoiceMessage(content="Пост готов.", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=_skill())
+    d = Director(llm=llm, skills=_skill(), facts=store)
     res = await d.handle(Task(content="сделай пост"))
 
     assert res.content == "Пост готов."
@@ -64,13 +64,13 @@ async def test_spawn_runs_temporary_agent(tmp_path):
 
 async def test_spawned_agent_runs_on_agent_llm(tmp_path):
     """Директор и временные агенты могут сидеть на разных моделях."""
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     director_llm = FakeLLM([
         _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши"}),
         ChoiceMessage(content="Готово.", tool_calls=None),
     ])
     agent_llm = FakeLLM([ChoiceMessage(content="написал", tool_calls=None)])
-    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill())
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), facts=store)
     res = await d.handle(Task(content="пост"))
 
     assert res.content == "Готово."
@@ -81,7 +81,7 @@ async def test_spawned_agent_runs_on_agent_llm(tmp_path):
 
 
 async def test_spawn_dedupes_tools_shared_by_skills(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     # Два навыка с одноимённым инструментом: шлюз на дубль имени отвечает 400.
     lib = _skill()
     lib["editor"] = Skill(name="editor", description="правит", instructions="## правка",
@@ -91,7 +91,7 @@ async def test_spawn_dedupes_tools_shared_by_skills(tmp_path):
         ChoiceMessage(content="готово", tool_calls=None),
         ChoiceMessage(content="ок", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=lib)
+    d = Director(llm=llm, skills=lib, facts=store)
     await d.handle(Task(content="сделай"))
 
     names = [t["function"]["name"] for t in llm.seen_tools[1]]
@@ -99,9 +99,9 @@ async def test_spawn_dedupes_tools_shared_by_skills(tmp_path):
 
 
 async def _spawn_tools(tmp_path, lib, skills) -> dict:
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     llm = FakeLLM([ChoiceMessage(content="готово", tool_calls=None)])
-    d = Director(llm=llm, skills=lib)
+    d = Director(llm=llm, skills=lib, facts=store)
     spawn = next(t for t in d.tools if t.name == "spawn")
     return json.loads(await spawn.execute({"role": "х", "skills": skills, "task": "t"}))
 
@@ -142,12 +142,12 @@ async def test_spawn_rejects_skill_tool_shadowing_host_query(tmp_path):
 
 
 async def test_spawn_rejects_unknown_skill(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     llm = FakeLLM([
         _call("spawn", {"role": "х", "skills": ["нетакого"], "task": "t"}),
         ChoiceMessage(content="навыка нет", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=_skill())
+    d = Director(llm=llm, skills=_skill(), facts=store)
     await d.handle(Task(content="сделай"))
 
     tool_reply = json.loads(llm.seen[1][-1]["content"])
@@ -158,13 +158,13 @@ async def test_spawn_rejects_unknown_skill(tmp_path):
 async def test_spawned_agents_never_get_memory_tools(tmp_path):
     """Память принадлежит Директору. Держится не фильтром библиотеки, а тем, что
     инструменты памяти приходят из ядра и в скилах их нет вовсе."""
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     llm = FakeLLM([
         _call("spawn", {"role": "х", "skills": ["writer"], "task": "запомни хост"}),
         ChoiceMessage(content="сделал", tool_calls=None),   # ответ спавнутого агента
         ChoiceMessage(content="готово", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=_skill())
+    d = Director(llm=llm, skills=_skill(), facts=store)
     await d.handle(Task(content="сделай"))
 
     memory_tools = {"recall_facts", "remember_fact"}
@@ -174,13 +174,12 @@ async def test_spawned_agents_never_get_memory_tools(tmp_path):
 
 
 def test_memory_index_lists_keys_not_values(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
-    store = facts.get_store()
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     store.remember("docker", "compose_path", "/opt/app")
     store.remember("docker", "engine_version", "27.1")
     store.remember("global", "timezone", "UTC")
 
-    idx = _memory_index()
+    idx = _memory_index(store)
     assert "- docker:" in idx
     assert "compose_path" in idx and "engine_version" in idx
     assert "- global:" in idx and "timezone" in idx
@@ -196,7 +195,7 @@ async def test_spawned_agent_gets_one_host_query_with_union_scope(tmp_path):
     from skills.security.tools import ACCESS as SEC
     from skills.tls.tools import ACCESS as TLS
 
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     lib = {
         "tls": Skill(name="tls", description="сертификаты", instructions="п", tools=[], access=TLS),
         "security": Skill(name="security", description="аудит", instructions="п", tools=[], access=SEC),
@@ -206,7 +205,7 @@ async def test_spawned_agent_gets_one_host_query_with_union_scope(tmp_path):
         ChoiceMessage(content="проверено", tool_calls=None),
         ChoiceMessage(content="Готово.", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=lib)
+    d = Director(llm=llm, skills=lib, facts=store)
     await d.handle(Task(content="аудит сертификатов"))
 
     sub_tools = {t["function"]["name"] for t in llm.seen_tools[1]}
@@ -219,13 +218,13 @@ async def test_spawned_agent_gets_one_host_query_with_union_scope(tmp_path):
 
 
 async def test_spawned_agent_without_host_skills_gets_no_host_query(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     llm = FakeLLM([
         _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши"}),
         ChoiceMessage(content="написал", tool_calls=None),
         ChoiceMessage(content="Готово.", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=_skill())
+    d = Director(llm=llm, skills=_skill(), facts=store)
     await d.handle(Task(content="пост"))
 
     sub_tools = {t["function"]["name"] for t in llm.seen_tools[1]}
@@ -235,8 +234,7 @@ async def test_spawned_agent_without_host_skills_gets_no_host_query(tmp_path):
 async def test_fact_written_after_an_untrusted_spawn_goes_to_quarantine(tmp_path):
     """Недоверенный текст возвращается в контекст Директора: что он запишет по итогам
     такой задачи, в активную память не попадает до одобрения владельцем (аудит F09)."""
-    facts.init_store(str(tmp_path / "f.db"))
-    store = facts.get_store()
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     store.remember("net", "asn", "AS100")
     lib = {"search": Skill(name="search", description="ищет в вебе",
                            instructions="## поиск", tools=[], untrusted=True)}
@@ -248,7 +246,7 @@ async def test_fact_written_after_an_untrusted_spawn_goes_to_quarantine(tmp_path
                                 "verified": True, "tainted": False}),
         ChoiceMessage(content="готово", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=lib)
+    d = Director(llm=llm, skills=lib, facts=store)
     await d.handle(Task(content="узнай asn", run_id="run-7"))
 
     (p,) = store.proposals()
@@ -260,16 +258,16 @@ async def test_fact_written_after_an_untrusted_spawn_goes_to_quarantine(tmp_path
 
 
 async def test_fact_from_an_ordinary_task_is_active(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     llm = FakeLLM([
         _call("remember_fact", {"scope": "net", "key": "asn", "value": "AS123"}),
         ChoiceMessage(content="готово", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=_skill())
+    d = Director(llm=llm, skills=_skill(), facts=store)
     await d.handle(Task(content="запомни"))
 
-    assert facts.get_store().proposals() == []
-    assert facts.get_store().recall(scope="net")[0]["value"] == "AS123"
+    assert store.proposals() == []
+    assert store.recall(scope="net")[0]["value"] == "AS123"
 
 
 def test_memory_index_collapses_tail_when_budget_spent():
@@ -352,10 +350,10 @@ async def _wait_pending(gw, n):
 async def test_two_specialists_get_separate_confirmations(tmp_path):
     from app.agents.messages import Decision
 
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     executed: list[str] = []
     gw, bot, requests = _telegram_gateway()
-    d = Director(llm=RoutingLLM(), gateway=gw, skills=_ops_library(executed))
+    d = Director(llm=RoutingLLM(), gateway=gw, skills=_ops_library(executed), facts=store)
     root = Task(content="перезапусти обе ноды")
     run = asyncio.create_task(d.handle(root))
     await _wait_pending(gw, 2)
@@ -381,10 +379,10 @@ async def test_two_specialists_get_separate_confirmations(tmp_path):
 async def test_yes_to_all_covers_run_children_and_ends_with_answer(tmp_path):
     from app.agents.messages import Decision
 
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     executed: list[str] = []
     gw, bot, _requests = _telegram_gateway()
-    d = Director(llm=RoutingLLM(), gateway=gw, skills=_ops_library(executed))
+    d = Director(llm=RoutingLLM(), gateway=gw, skills=_ops_library(executed), facts=store)
     root = Task(content="перезапусти обе ноды")
     gw._grants[root.id] = {"restart: host=node-a"}
     run = asyncio.create_task(d.handle(root))
@@ -401,10 +399,10 @@ async def test_yes_to_all_covers_run_children_and_ends_with_answer(tmp_path):
 async def test_parent_cancel_clears_child_pending(tmp_path):
     from app.agents.messages import Decision
 
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     executed: list[str] = []
     gw, _bot, _requests = _telegram_gateway()
-    d = Director(llm=RoutingLLM(), gateway=gw, skills=_ops_library(executed))
+    d = Director(llm=RoutingLLM(), gateway=gw, skills=_ops_library(executed), facts=store)
     run = asyncio.create_task(d.handle(Task(content="перезапусти")))
     await _wait_pending(gw, 2)
     stale = {rid: p.message_id for rid, p in gw._pending.items()}
@@ -421,19 +419,19 @@ async def test_parent_cancel_clears_child_pending(tmp_path):
 async def test_remember_fact_shows_similar_but_writes_anyway(tmp_path):
     """Дубль под другим ключом Директор увидит в ответе инструмента — но запись
     не блокируем: двухходовка заставила бы его избегать remember_fact."""
-    facts.init_store(str(tmp_path / "f.db"))
-    facts.get_store().remember("bot", "dialog_db", "история диалога в /data/dialog.db")
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("bot", "dialog_db", "история диалога в /data/dialog.db")
     llm = FakeLLM([
         _call("remember_fact", {"scope": "bot", "key": "history_path",
                                 "value": "диалог хранится в /data/dialog.db"}),
         ChoiceMessage(content="готово", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=_skill())
+    d = Director(llm=llm, skills=_skill(), facts=store)
     await d.handle(Task(content="запомни"))
 
     result = next(m for m in llm.seen[-1] if m.get("role") == "tool")
     assert "dialog_db" in result["content"]
-    assert {f["key"] for f in facts.get_store().recall()} == {"dialog_db", "history_path"}
+    assert {f["key"] for f in store.recall()} == {"dialog_db", "history_path"}
 
 
 # ---------- TODO-лист: план от Директора, отметки ставит код ----------
@@ -449,7 +447,7 @@ def _progress_bot():
 
 
 async def test_agent_marks_plan_steps_itself(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     progress, bot = _progress_bot()
     director_llm = FakeLLM([
         _call("plan", {"title": "Пост", "steps": ["Написать пост", "Проверить"]}),
@@ -462,7 +460,8 @@ async def test_agent_marks_plan_steps_itself(tmp_path):
         # напоминание про пункт 2 — агент снова не отметил
         ChoiceMessage(content="всё написал", tool_calls=None),
     ])
-    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(),
+                 progress=progress, facts=store)
     await d.handle(Task(content="пост"))
 
     shown = [c.args[0] for c in bot.edit_message_text.await_args_list]
@@ -481,7 +480,7 @@ async def test_agent_marks_plan_steps_itself(tmp_path):
 async def test_agent_that_forgot_marks_gets_one_reminder_turn(tmp_path):
     """Прод 16.09: deepseek-v4-flash сделал работу, но mark_step не вызвал — пункты
     ушли в «пропущен». Один ход только с mark_step; ответ агента не пишется заново."""
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     progress, bot = _progress_bot()
     director_llm = FakeLLM([
         _call("plan", {"title": "Пост", "steps": ["Написать пост", "Проверить"]}),
@@ -501,7 +500,8 @@ async def test_agent_that_forgot_marks_gets_one_reminder_turn(tmp_path):
                 name="echo", arguments=json.dumps({"text": "ещё"}))),
         ]),
     ])
-    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(),
+                 progress=progress, facts=store)
     await d.handle(Task(content="пост"))
 
     last = bot.edit_message_text.await_args_list[-1].args[0]
@@ -514,7 +514,7 @@ async def test_agent_that_forgot_marks_gets_one_reminder_turn(tmp_path):
 
 
 async def test_failed_reminder_keeps_agent_result(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     progress, _ = _progress_bot()
     director_llm = FakeLLM([
         _call("plan", {"title": "Пост", "steps": ["Написать пост"]}),
@@ -523,7 +523,8 @@ async def test_failed_reminder_keeps_agent_result(tmp_path):
     ])
     # второго ответа нет — ход-напоминание падает
     agent_llm = FakeLLM([ChoiceMessage(content="написал", tool_calls=None)])
-    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(),
+                 progress=progress, facts=store)
     res = await d.handle(Task(content="пост"))
 
     assert res.content == "Готово."
@@ -532,7 +533,7 @@ async def test_failed_reminder_keeps_agent_result(tmp_path):
 
 
 async def test_no_reminder_when_agent_marked_everything(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     progress, _ = _progress_bot()
     director_llm = FakeLLM([
         _call("plan", {"title": "Пост", "steps": ["Написать пост"]}),
@@ -543,14 +544,15 @@ async def test_no_reminder_when_agent_marked_everything(tmp_path):
         _call("mark_step", {"step": 1, "status": "done"}),
         ChoiceMessage(content="написал", tool_calls=None),
     ])
-    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(),
+                 progress=progress, facts=store)
     await d.handle(Task(content="пост"))
 
     assert len(agent_llm.seen) == 2
 
 
 async def test_spawn_without_steps_is_refused_when_plan_exists(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     progress, _ = _progress_bot()
     llm = FakeLLM([
         _call("plan", {"title": "Пост", "steps": ["Написать"]}),
@@ -558,7 +560,7 @@ async def test_spawn_without_steps_is_refused_when_plan_exists(tmp_path):
         _call("spawn", {"role": "к", "skills": ["writer"], "task": "напиши", "steps": [5]}),
         ChoiceMessage(content="Не вышло.", tool_calls=None),
     ])
-    d = Director(llm=llm, skills=_skill(), progress=progress)
+    d = Director(llm=llm, skills=_skill(), progress=progress, facts=store)
     await d.handle(Task(content="пост"))
 
     refusals = [m["content"] for m in llm.seen[-1] if m["role"] == "tool"][1:]
@@ -567,14 +569,15 @@ async def test_spawn_without_steps_is_refused_when_plan_exists(tmp_path):
 
 
 async def test_spawn_without_plan_needs_no_steps_and_gets_no_mark_step(tmp_path):
-    facts.init_store(str(tmp_path / "f.db"))
+    store = KnowledgeStore(str(tmp_path / "f.db"))
     progress, _ = _progress_bot()
     director_llm = FakeLLM([
         _call("spawn", {"role": "к", "skills": ["writer"], "task": "напиши"}),
         ChoiceMessage(content="Готово.", tool_calls=None),
     ])
     agent_llm = FakeLLM([ChoiceMessage(content="написал", tool_calls=None)])
-    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), progress=progress)
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(),
+                 progress=progress, facts=store)
     await d.handle(Task(content="пост"))
 
     assert d._agents_used == ["spawned:writer"]

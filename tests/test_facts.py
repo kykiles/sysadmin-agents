@@ -1,6 +1,6 @@
 import sqlite3
 
-from app.memory.facts import KnowledgeStore
+from agent_memory.facts import KnowledgeStore
 
 
 def _store(tmp_path):

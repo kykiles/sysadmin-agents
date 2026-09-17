@@ -3,7 +3,7 @@ import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from app.store import SqliteStore
+from agent_memory.store import SqliteStore
 
 # Слова запроса подаём в FTS как строковые литералы через OR: так пользовательский
 # текст не может оказаться синтаксисом FTS (NEAR, ^, "), а bm25 ранжирует по числу

@@ -3,11 +3,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.learning.lint import LintState, StaleFact
+from agent_memory.facts import KnowledgeStore
+from agent_memory.lint import LintState, StaleFact
 from app.learning.review import (
     LearningContext, ReviewOutcome, render_review, resolve_fact, run_review, short_id,
 )
-from app.memory.facts import KnowledgeStore
 from app.monitoring.loop import MonitorConfig, run_tick
 from app.monitoring.state import MonitorState
 
@@ -162,7 +162,7 @@ async def test_review_shows_quarantined_facts_with_buttons(tmp_path):
 
 @pytest.mark.asyncio
 async def test_review_suggests_facts_from_journal(tmp_path):
-    from app.memory.journal import TaskJournal
+    from agent_memory.journal import TaskJournal
 
     journal = TaskJournal(str(tmp_path / "tasks.db"))
     journal.record(task_id="1", chat_id="c", intent="почему упал бот", agents=[],
@@ -186,7 +186,7 @@ async def test_review_suggests_facts_from_journal(tmp_path):
 
 @pytest.mark.asyncio
 async def test_consolidation_skips_facts_already_known(tmp_path):
-    from app.memory.journal import TaskJournal
+    from agent_memory.journal import TaskJournal
 
     journal = TaskJournal(str(tmp_path / "tasks.db"))
     journal.record(task_id="1", chat_id="c", intent="i", agents=[], tool_seq=[],
@@ -205,7 +205,7 @@ async def test_consolidation_skips_facts_already_known(tmp_path):
 
 @pytest.mark.asyncio
 async def test_consolidation_does_not_see_quarantined_facts(tmp_path):
-    from app.memory.journal import TaskJournal
+    from agent_memory.journal import TaskJournal
 
     journal = TaskJournal(str(tmp_path / "tasks.db"))
     journal.record(task_id="1", chat_id="c", intent="i", agents=[], tool_seq=[],

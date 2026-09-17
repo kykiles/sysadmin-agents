@@ -32,7 +32,7 @@ async def test_tasks_run_one_at_a_time(monkeypatch):
         return Result(task_id=task.id, content="ok")
 
     monkeypatch.setattr(Agent, "handle", fake_handle)
-    monkeypatch.setattr("app.agents.director._memory_index", lambda: "")
+    monkeypatch.setattr("app.agents.director._memory_index", lambda facts: "")
 
     d = Director(llm=None)
     await asyncio.gather(*(d.handle(Task(content=f"t{i}")) for i in range(5)))

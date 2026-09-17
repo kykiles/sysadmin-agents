@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime, timezone
 
-from app.store import SqliteStore
+from agent_memory.store import SqliteStore
 
 
 class KnowledgeStore(SqliteStore):
@@ -218,16 +218,3 @@ class KnowledgeStore(SqliteStore):
             cur = conn.execute("DELETE FROM facts WHERE scope = ?", (scope,))
             return cur.rowcount
 
-
-_store: KnowledgeStore | None = None
-
-
-def init_store(db_path: str) -> None:
-    global _store
-    _store = KnowledgeStore(db_path)
-
-
-def get_store() -> KnowledgeStore:
-    if _store is None:
-        raise RuntimeError("KnowledgeStore не инициализирован — вызови init_store()")
-    return _store

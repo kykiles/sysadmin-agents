@@ -15,8 +15,8 @@ from app.agents.messages import Task, Result
 from app.bot.reports import save_report
 from app.config import settings
 from app.llm.client import LLMClient
+from agent_memory.facts import KnowledgeStore
 from app.logging import get_logger, redact
-from app.memory.facts import get_store
 from app.skills.loader import load_all_skills
 from app.memory.tools import build_tools as memory_tools
 from app.skills.readonly import HostAccess, build_host_tools
@@ -229,7 +229,7 @@ def _steps_block(steps: dict[int, str]) -> str:
     )
 
 
-def _memory_index() -> str:
+def _memory_index(facts: KnowledgeStore | None) -> str:
     """Оглавление памяти в промпт — области, ключи и «когда пригодится»; сами
     значения по запросу.
 
@@ -243,10 +243,9 @@ def _memory_index() -> str:
     исчерпан, хвост области схлопывается в одну строку — он остаётся достижим
     через recall_facts(scope=...), просто не занимает контекст даром.
     """
-    try:
-        index = get_store().index()
-    except RuntimeError:
+    if facts is None:
         return ""
+    index = facts.index()
     if not index:
         return "\n\nПамять команды пуста."
     lines = _render_index(index, settings.memory_index_token_budget)
@@ -291,7 +290,7 @@ class Director(Agent):
     def __init__(self, llm: LLMClient, gateway=None,
                  memory=None, journal=None, skills: dict | None = None,
                  skills_dir: Path | None = None, agent_llm: LLMClient | None = None,
-                 progress=None):
+                 progress=None, facts: KnowledgeStore | None = None):
         # Модель временных агентов; без неё они работают на модели Директора.
         agent_llm = agent_llm or llm
 
@@ -479,7 +478,9 @@ class Director(Agent):
         # Директору нужны только чтение и запись, забывать факты — не его дело.
         # Память принадлежит Директору: инструменты приходят из ядра, а не из
         # библиотеки скилов, поэтому выдать их спавнутому агенту нечем.
-        tools = [report_tool, *memory_tools(self._provenance)]
+        tools = [report_tool]
+        if facts is not None:
+            tools += memory_tools(facts, self._provenance)
         if library:
             tools.append(spawn_tool)
         if library and progress is not None:
@@ -532,6 +533,7 @@ class Director(Agent):
             memory=memory,
         )
         self._library = library
+        self._facts = facts
         self._skills_dir = skills_dir
         self._base_prompt = self.system_prompt
         self._journal = journal
@@ -570,7 +572,8 @@ class Director(Agent):
             self._untrusted_skills = set()
             self._report_path = ""
             self._run_id = task.run_id or task.id
-            self.system_prompt = self._base_prompt + await asyncio.to_thread(_memory_index)
+            self.system_prompt = self._base_prompt + await asyncio.to_thread(
+                _memory_index, self._facts)
             try:
                 result = await super().handle(task)
             finally:

@@ -2,8 +2,8 @@ from collections.abc import Callable
 
 from pydantic import BaseModel, Field
 
+from agent_memory.facts import KnowledgeStore
 from app.logging import redact
-from app.memory.facts import get_store
 from app.tools.base import Tool, Safety
 
 
@@ -31,11 +31,8 @@ class RecallParams(BaseModel):
     query: str | None = Field(default=None, description="substring filter over key, value and description")
 
 
-async def recall_facts(scope: str | None = None, query: str | None = None) -> dict:
-    return {"facts": get_store().recall(scope=scope, query=query)}
-
-
-def build_tools(provenance: Callable[[], dict | None] | None = None) -> list[Tool]:
+def build_tools(store: KnowledgeStore,
+                provenance: Callable[[], dict | None] | None = None) -> list[Tool]:
     """Инструменты памяти. Не скилл: память принадлежит Директору и временным
     агентам не выдаётся — забывать факты человек решает кнопкой в Telegram.
 
@@ -46,12 +43,14 @@ def build_tools(provenance: Callable[[], dict | None] | None = None) -> list[Too
     верить веб-странице, которая осядет в памяти навсегда, нельзя.
     """
 
+    async def recall_facts(scope: str | None = None, query: str | None = None) -> dict:
+        return {"facts": store.recall(scope=scope, query=query)}
+
     async def remember_fact(scope: str, key: str, value: str, description: str = "",
                             kind: str = "stable") -> dict:
         origin = provenance() if provenance else None
         # память переживает задачу и уходит в каждый следующий промпт — без секретов
         value, description = redact(value), redact(description)
-        store = get_store()
         # Похожие ищем ДО записи, иначе новый факт найдёт сам себя.
         similar = store.similar(scope, key, f"{value} {description}")
         # Напоминание возвращаем в результате, а не строкой в системном промпте:

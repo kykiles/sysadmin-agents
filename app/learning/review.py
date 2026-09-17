@@ -2,9 +2,9 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from agent_memory.consolidate import propose
+from agent_memory.lint import LintState, StaleFact, find_stale
 from app.config import settings
-from app.learning.consolidate import propose
-from app.learning.lint import LintState, StaleFact, find_stale
 from app.logging import get_logger
 
 log = get_logger("learning.review")

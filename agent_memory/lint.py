@@ -1,10 +1,11 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from app.logging import get_logger
-from app.store import SqliteStore
+from agent_memory.facts import KnowledgeStore
+from agent_memory.store import SqliteStore
 
-log = get_logger("learning.lint")
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -17,11 +18,7 @@ class StaleFact:
 
 
 class LintState(SqliteStore):
-    """Что уже показывали, чтобы не напоминать об одном и том же каждый прогон.
-
-    Живёт в той же БД, что журнал задач: это оперативные данные обучения,
-    а не сами знания (факты лежат в базе диалога, см. main.init_store).
-    """
+    """Что уже показывали, чтобы не напоминать об одном и том же каждый прогон."""
 
     SCHEMA = (
         "CREATE TABLE IF NOT EXISTS lint_seen ("
@@ -59,7 +56,7 @@ def _age_days(ts: str, now: datetime) -> int | None:
 
 
 def find_stale(
-    store,
+    store: KnowledgeStore,
     state: LintState,
     *,
     stable_days: int,
@@ -81,7 +78,8 @@ def find_stale(
             continue
         age = _age_days(fact["ts"], now)
         if age is None:
-            log.warning("bad_fact_ts", scope=fact["scope"], key=fact["key"], ts=fact["ts"])
+            log.warning("bad_fact_ts scope=%s key=%s ts=%s",
+                        fact["scope"], fact["key"], fact["ts"])
             continue
         limit = snapshot_days if fact["kind"] == "snapshot" else stable_days
         if age >= limit:
