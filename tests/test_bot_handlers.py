@@ -190,6 +190,21 @@ async def test_suggested_fact_callback_owner():
     learning.facts.remember.assert_called_once()
 
 
+async def test_suggested_fact_keeps_its_kind(tmp_path):
+    """Урок должен осесть в памяти уроком, а не обычным фактом."""
+    from agent_memory.facts import KnowledgeStore
+
+    learning = MagicMock()
+    learning.facts = KnowledgeStore(str(tmp_path / "f.db"))
+    learning.pending = {"s1": {"scope": "deploy", "key": "check_backup",
+                               "value": "перед миграцией снять бэкап",
+                               "kind": "lesson", "description": "перед миграцией"}}
+
+    await _press(_router(learning=learning), "sf:s1:add")
+
+    assert learning.facts.recall(scope="deploy")[0]["kind"] == "lesson"
+
+
 @pytest.mark.parametrize("caller", REFUSED)
 async def test_forget_fact_callback_refused(caller, monkeypatch):
     import app.bot.handlers as handlers

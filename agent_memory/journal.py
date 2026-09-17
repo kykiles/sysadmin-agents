@@ -164,14 +164,18 @@ class TaskJournal(SqliteStore):
         ]
 
     def recent_with_summary(self, hours: int) -> list[dict]:
-        """Задачи за период в виде «что просили → чем кончилось» — вход консолидации."""
+        """Задачи за период в виде «что просили → чем кончилось» плюс эпизод — вход
+        консолидации. Без проблем задач она предлагает только факты об инфраструктуре,
+        а из повторяющейся неудачи получается урок или запрет."""
         since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT intent, summary FROM tasks WHERE ts >= ? ORDER BY ts",
+                "SELECT intent, summary, outcome, problems FROM tasks WHERE ts >= ? ORDER BY ts",
                 (since,),
             ).fetchall()
-        return [{"intent": intent, "summary": summary or ""} for intent, summary in rows]
+        return [{"intent": intent, "summary": summary or "", "outcome": outcome or "",
+                 "problems": json.loads(problems or "[]")}
+                for intent, summary, outcome, problems in rows]
 
     def save_transcript(self, task_id: str, body: str, keep: int) -> None:
         """Сохранить ход задачи, оставив в базе только `keep` последних."""

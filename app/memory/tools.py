@@ -22,7 +22,9 @@ class RememberParams(BaseModel):
     kind: str = Field(
         default="stable",
         description='"stable" for topology, paths, decisions; "snapshot" for values that drift '
-                    "(versions, ports, sizes) — those are re-checked sooner",
+                    "(versions, ports, sizes) — those are re-checked sooner; "
+                    '"lesson" for what to check before doing X next time; '
+                    '"negative_rule" for what not to do because it did not help',
     )
 
 

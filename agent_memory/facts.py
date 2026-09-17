@@ -44,6 +44,14 @@ _FACTS_LIVE_INDEX = (
 )
 
 
+# Виды знания. `stable`/`snapshot` различаются сроком перепроверки в lint'е;
+# `lesson` («перед X проверь Y») и `negative_rule` («при X не делай Y — не помогает») —
+# выводы из того, что не вышло: проверять их нечем, поэтому для lint'а они как stable,
+# но в оглавлении помечаются словом, иначе правило читается как факт об инфраструктуре.
+KIND_LABELS = {"lesson": "урок", "negative_rule": "не делать"}
+KINDS = ("stable", "snapshot", *KIND_LABELS)
+
+
 def _norm(value: str) -> str:
     """Значение для сравнения «то же самое или другое»: различие в пробелах —
     не смена факта, а переформулировка модели."""
@@ -278,12 +286,13 @@ class KnowledgeStore(SqliteStore):
         """
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT scope, key, description FROM facts WHERE valid_until IS NULL "
+                "SELECT scope, key, description, kind FROM facts WHERE valid_until IS NULL "
                 "ORDER BY scope, hits DESC, last_used DESC, valid_from DESC"
             ).fetchall()
         index: dict[str, list[dict]] = {}
-        for scope, key, description in rows:
-            index.setdefault(scope, []).append({"key": key, "description": description})
+        for scope, key, description, kind in rows:
+            index.setdefault(scope, []).append(
+                {"key": key, "description": description, "kind": kind})
         return [{"scope": s, "facts": f} for s, f in index.items()]
 
     def all_live(self) -> list[dict]:

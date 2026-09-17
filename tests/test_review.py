@@ -235,3 +235,69 @@ async def test_review_survives_broken_consolidation(tmp_path):
 
     assert [f.key for f in outcome.stale] == ["ssh_port"]
     assert outcome.suggested == []
+
+
+# ---------- уроки и запреты: неудачи эпизодов превращаются в правила ----------
+
+def _journal_with_failed_episodes(tmp_path):
+    from agent_memory.journal import TaskJournal
+
+    journal = TaskJournal(str(tmp_path / "tasks.db"))
+    for n in (1, 2):
+        journal.record(
+            task_id=str(n), chat_id="c", intent="почему не работает инбаунд", agents=[],
+            tool_seq=[], iterations=3, success=True, summary="перезапустили xray",
+            outcome="partial",
+            problems=["xray_restart: инбаунд не поднялся", "план: пункт 2 не выполнен"],
+        )
+    return journal
+
+
+@pytest.mark.asyncio
+async def test_consolidation_sees_episode_problems(tmp_path):
+    journal = _journal_with_failed_episodes(tmp_path)
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(content="[]"))
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = llm, journal
+
+    await run_review(ctx)
+
+    prompt = llm.chat.call_args.args[0][0]["content"]
+    assert "не вышло: xray_restart: инбаунд не поднялся" in prompt
+    assert "[partial]" in prompt
+
+
+@pytest.mark.asyncio
+async def test_repeated_problem_becomes_negative_rule(tmp_path):
+    journal = _journal_with_failed_episodes(tmp_path)
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(content=(
+        '[{"scope": "xray", "key": "no_blind_restart", "value": "рестарт xray инбаунд '
+        'не поднимает", "description": "когда инбаунд молчит", "kind": "negative_rule"}]'
+    )))
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = llm, journal
+
+    outcome = await run_review(ctx)
+
+    assert [f["kind"] for f in outcome.suggested] == ["negative_rule"]
+    assert "(не делать)" in render_review(outcome)
+
+
+@pytest.mark.asyncio
+async def test_unknown_kind_falls_back_to_stable(tmp_path):
+    from agent_memory.journal import TaskJournal
+
+    journal = TaskJournal(str(tmp_path / "tasks.db"))
+    journal.record(task_id="1", chat_id="c", intent="i", agents=[], tool_seq=[],
+                   iterations=1, success=True, summary="s")
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(
+        content='[{"scope": "s", "key": "k", "value": "v", "kind": "ignore_all_rules"}]'))
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = llm, journal
+
+    outcome = await run_review(ctx)
+
+    assert [f["kind"] for f in outcome.suggested] == ["stable"]

@@ -119,7 +119,10 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         _, sid, _choice = callback.data.split(":")
         fact = learning.pending.pop(sid, None) if learning else None
         if fact is not None:
+            # kind доезжает до записи: урок и запрет иначе осели бы в памяти
+            # обычными фактами — без пометки в оглавлении и со сроком stable.
             learning.facts.remember(fact["scope"], fact["key"], fact["value"],
+                                    fact.get("kind", "stable"),
                                     description=fact.get("description", ""),
                                     origin="consolidation")
         await callback.answer("Записано" if fact else "Предложение устарело")

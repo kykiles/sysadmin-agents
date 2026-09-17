@@ -186,6 +186,21 @@ def test_memory_index_lists_keys_not_values(tmp_path):
     assert "/opt/app" not in idx  # значения в промпт не попадают
 
 
+def test_memory_index_marks_lessons_and_bans(tmp_path):
+    """Урок и запрет — не факты об инфраструктуре: в оглавлении они помечены словом."""
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("deploy", "check_backup", "перед миграцией снять бэкап", "lesson")
+    store.remember("deploy", "no_restart_all", "рестарт всего стека не помогает",
+                   "negative_rule")
+    store.remember("deploy", "compose_path", "/opt/app")
+
+    idx = _memory_index(store)
+
+    assert "check_backup (урок)" in idx
+    assert "no_restart_all (не делать)" in idx
+    assert "compose_path\n" in idx or idx.endswith("compose_path")
+
+
 async def test_spawned_agent_gets_one_host_query_with_union_scope(tmp_path):
     """tls + security → один host_query, видящий бинарники обоих навыков.
 
@@ -278,7 +293,8 @@ def test_memory_index_collapses_tail_when_budget_spent():
     from app.agents.director import _render_index
 
     area = {"scope": "host", "facts": [
-        {"key": f"key_{i}", "description": "довольно длинное описание факта"} for i in range(50)
+        {"key": f"key_{i}", "description": "довольно длинное описание факта",
+         "kind": "stable"} for i in range(50)
     ]}
     lines = _render_index([area], token_budget=40)
 

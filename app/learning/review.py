@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from agent_memory.consolidate import propose
+from agent_memory.facts import KIND_LABELS
 from agent_memory.lint import LintState, StaleFact, find_stale
 from app.config import settings
 from app.logging import get_logger
@@ -94,6 +95,8 @@ def render_review(outcome: ReviewOutcome) -> str:
     if outcome.suggested:
         lines = ["**Предлагаю запомнить**", ""]
         for f in outcome.suggested:
-            lines.append(f"> `{f['scope']}/{f['key']}` = {f['value']}")
+            label = KIND_LABELS.get(f.get("kind", ""), "")
+            lines.append(f"> `{f['scope']}/{f['key']}` = {f['value']}"
+                         + (f" ({label})" if label else ""))
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)

@@ -17,7 +17,7 @@ from app.agents.messages import Task, Result
 from app.bot.reports import save_report
 from app.config import settings
 from app.llm.client import LLMClient, Usage
-from agent_memory.facts import KnowledgeStore
+from agent_memory.facts import KIND_LABELS, KnowledgeStore
 from app.logging import get_logger, redact
 from app.skills.loader import load_all_skills
 from app.memory.tools import build_tools as memory_tools
@@ -266,6 +266,10 @@ def _render_index(index: list[dict], token_budget: int) -> list[str]:
         shown = 0
         for fact in area["facts"]:
             line = f"  - {fact['key']}"
+            # Урок и запрет — не факты об инфраструктуре, а выводы из неудач; без
+            # пометки «перед деплоем проверь бэкап» читается как топология.
+            if label := KIND_LABELS.get(fact["kind"], ""):
+                line += f" ({label})"
             if fact["description"]:
                 line += f" — {fact['description']}"
             cost = len(line) // 4 + 1

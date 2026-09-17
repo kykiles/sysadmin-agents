@@ -30,6 +30,19 @@ def test_snapshot_goes_stale_earlier_than_stable(tmp_path):
     assert [(f.key, f.age_days) for f in found] == [("ssh_port", 20)]
 
 
+def test_lesson_ages_like_stable_fact(tmp_path):
+    """Урок и запрет перепроверить нечем — напоминаем о них по сроку stable."""
+    store, state = _setup(tmp_path)
+    store.remember("deploy", "check_backup", "снять бэкап", "lesson")
+    store.remember("deploy", "no_restart_all", "рестарт всего не помогает", "negative_rule")
+    _age(store, "deploy", "check_backup", 20)
+    _age(store, "deploy", "no_restart_all", 100)
+
+    found = find_stale(store, state, now=NOW, **DEFAULTS)
+
+    assert [f.key for f in found] == ["no_restart_all"]
+
+
 def test_fresh_facts_are_not_reported(tmp_path):
     store, state = _setup(tmp_path)
     store.remember("host-a", "ssh_port", "2222", kind="snapshot")
