@@ -17,7 +17,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="start", description="Проверить, что система активна"),
         BotCommand(command="help", description="Справка по возможностям"),
         BotCommand(command="reset", description="Очистить историю диалога"),
-        BotCommand(command="learn", description="Самопроверка: повторы и устаревшие знания"),
+        BotCommand(command="learn", description="Самопроверка памяти: что подтвердить и что запомнить"),
         BotCommand(command="reload", description="Перечитать навыки"),
         BotCommand(command="trace", description="Ход последней задачи файлом"),
     ])
