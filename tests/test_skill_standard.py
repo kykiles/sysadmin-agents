@@ -118,3 +118,15 @@ async def test_untrusted_skill_with_scripts_is_not_granted(tmp_path):
     spawn = next(t for t in d.tools if t.name == "spawn")
     out = await spawn.fn(role="r", skills=[skill.name], task="t")
     assert "недоверенный" in out["error"]
+
+
+async def test_subscription_is_untrusted_and_refused_next_to_host():
+    """Скил тянет чужой текст: имена узлов подписки и ответы ip-api."""
+    from app.agents.director import Director
+
+    skills = load_all_skills(SKILLS_DIR)
+    assert skills["subscription"].untrusted is True
+    d = Director(llm=None, skills=skills)
+    spawn = next(t for t in d.tools if t.name == "spawn")
+    out = await spawn.fn(role="r", skills=["subscription", "host"], task="t")
+    assert "недоверенный" in out["error"]
