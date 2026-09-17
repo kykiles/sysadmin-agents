@@ -69,9 +69,9 @@ cp .env.example .env
 | `CONFIRMATION_TIMEOUT_SECONDS` | `300` | Таймаут подтверждения (сек) |
 | `AUDIT_LOG_PATH` | `/data/audit.log` | Путь к аудит-логу |
 | `AUDIT_TRAIL_PATH` | `/data/audit.jsonl` | Журнал опасных вызовов: аргументы, решение (`approved`, `approved-all`, `auto-approved`, `rejected`), итог |
-| `DIALOG_DB_PATH` | `/data/dialog.db` | SQLite: история диалога и факты памяти |
+| `DIALOG_DB_PATH` | `/data/dialog.db` | SQLite: история диалога |
 | `DIALOG_HISTORY_LIMIT` | `20` | Сколько последних реплик Директор помнит |
-| `JOURNAL_DB_PATH` | `/data/tasks.db` | Журнал задач: из него Директор вспоминает прошлый опыт, по нему работает `/learn` и `/trace` |
+| `MEMORY_DB_PATH` | `/data/memory.db` | Своя база памяти: факты, карантин и журнал задач — из него Директор вспоминает прошлый опыт, по нему работают `/learn` и `/trace`. Старые `dialog.db` и `tasks.db` переливаются сюда при первом старте |
 | `DEPLOY_ALLOWED` | (пусто) | Сайты под `/opt`, разрешённые для деплоя (через запятую); пустой = деплой запрещён |
 | `SSH_KEY_PATH`, `SSH_USER` | `/data/ssh/id_ed25519`, `root` | Доступ навыка `ssh` к нодам |
 | `REMNAWAVE_BASE_URL`, `REMNAWAVE_API_KEY` | (пусто) | Панель Remnawave для навыка `remnawave` |

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     audit_log_path: str = Field(default="/data/audit.log", alias="AUDIT_LOG_PATH")
     audit_trail_path: str = Field(default="/data/audit.jsonl", alias="AUDIT_TRAIL_PATH")
     dialog_db_path: str = Field(default="/data/dialog.db", alias="DIALOG_DB_PATH")
+    # Своя база модуля памяти: факты, карантин, журнал задач, транскрипты, lint_seen.
+    # История диалога памятью не считается (ADR 0006) и остаётся в dialog.db.
+    memory_db_path: str = Field(default="/data/memory.db", alias="MEMORY_DB_PATH")
     dialog_history_limit: int = Field(default=20, alias="DIALOG_HISTORY_LIMIT")
     dialog_history_token_budget: int = Field(default=4000, alias="DIALOG_HISTORY_TOKEN_BUDGET")
     dialog_retention_days: int = Field(default=90, alias="DIALOG_RETENTION_DAYS")
@@ -44,7 +47,6 @@ class Settings(BaseSettings):
     # (см. handlers). Поэтому /tmp внутри контейнера, а не смонтированный /data.
     reports_dir: str = Field(default="/tmp/reports", alias="REPORTS_DIR")
     journal_enabled: bool = Field(default=True, alias="JOURNAL_ENABLED")
-    journal_db_path: str = Field(default="/data/tasks.db", alias="JOURNAL_DB_PATH")
     journal_transcripts: int = Field(default=20, alias="JOURNAL_TRANSCRIPTS")
     deploy_allowed: str = Field(default="", alias="DEPLOY_ALLOWED")
     remnawave_base_url: str = Field(default="", alias="REMNAWAVE_BASE_URL")

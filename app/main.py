@@ -9,6 +9,7 @@ from agent_memory.facts import KnowledgeStore
 from agent_memory.journal import TaskJournal
 from agent_memory.lint import LintState
 from app.memory.history import DialogHistory
+from app.memory.migrate import migrate_legacy
 from app.learning.review import LearningContext
 from app.bot.bot import create_bot, create_dispatcher, set_bot_commands
 from app.bot.gateway import TelegramConfirmationGateway
@@ -35,7 +36,7 @@ async def main() -> None:
     # Библиотека скилов лежит рядом с пакетом, а не внутри него: ядро не знает,
     # из какой предметной области будут задачи.
     skills_dir = Path(__file__).resolve().parent.parent / "skills"
-    facts = KnowledgeStore(settings.dialog_db_path)
+    facts = KnowledgeStore(settings.memory_db_path)
     skills = load_all_skills(skills_dir)
     history = DialogHistory(
         db_path=settings.dialog_db_path,
@@ -43,13 +44,15 @@ async def main() -> None:
         token_budget=settings.dialog_history_token_budget,
         retention_days=settings.dialog_retention_days,
     )
-    journal = TaskJournal(settings.journal_db_path) if settings.journal_enabled else None
+    journal = TaskJournal(settings.memory_db_path) if settings.journal_enabled else None
     learning = LearningContext(
         facts=facts,
-        lint=LintState(settings.journal_db_path),
+        lint=LintState(settings.memory_db_path),
         llm=llm,
         journal=journal,
     ) if journal is not None else None
+    # Хранилища выше создали таблицы — теперь в них есть куда переливать старые базы.
+    migrate_legacy(settings.memory_db_path, dialog_db=settings.dialog_db_path)
     bot = create_bot()
     progress = TelegramProgress(bot, settings.telegram_user_id)
     gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id, progress=progress)
