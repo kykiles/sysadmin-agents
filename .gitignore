@@ -13,7 +13,9 @@ AGENTS.md
 PROJECT.md
 CONTEXT.md
 CLAUDE.md
-docs/
+# docs/ — локальные черновики и аудиты; ADR версионируются
+docs/*
+!docs/adr/
 .claude/
 
 # оставшиеся задачи по аудиту 2026-09-12 — локальные, не версионируются
