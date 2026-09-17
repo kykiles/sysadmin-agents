@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import time
 from dataclasses import replace
 from functools import reduce
 from operator import or_
@@ -14,7 +15,7 @@ from app.agents.loader import compose_prompt
 from app.agents.messages import Task, Result
 from app.bot.reports import save_report
 from app.config import settings
-from app.llm.client import LLMClient
+from app.llm.client import LLMClient, Usage
 from agent_memory.facts import KnowledgeStore
 from app.logging import get_logger, redact
 from app.skills.loader import load_all_skills
@@ -327,6 +328,7 @@ class Director(Agent):
             except Exception:
                 log.warning("mark_step_reminder_failed", agent=sub.name)
                 return
+            self._sub_usage += msg.usage
             for tc in msg.tool_calls or []:
                 if tc.function.name == "mark_step":
                     result.trace.append("mark_step")
@@ -423,6 +425,7 @@ class Director(Agent):
                 if plan is not None:
                     await progress.finished(sub.agent_id)
             self._sub_trace.extend(result.trace)
+            self._sub_usage += result.usage
             self._agents_used.append(sub.name)
             return {"agent": sub.name, "result": result.content, "success": result.success}
 
@@ -544,6 +547,9 @@ class Director(Agent):
         self._lock = asyncio.Lock()
         self._untrusted_skills: set[str] = set()
         self._sub_trace: list[str] = []
+        # Цена спавнутых агентов — отдельно от своей: спавн платит дешёвой моделью,
+        # и без разделения не видно, за что уходят токены.
+        self._sub_usage = Usage()
         self._agents_used: list[str] = []
         self._report_path: str = ""
         self._run_id: str = ""
@@ -568,12 +574,14 @@ class Director(Agent):
     async def handle(self, task: Task) -> Result:
         async with self._lock:
             self._sub_trace = []
+            self._sub_usage = Usage()
             self._agents_used = []
             self._untrusted_skills = set()
             self._report_path = ""
             self._run_id = task.run_id or task.id
             self.system_prompt = self._base_prompt + await asyncio.to_thread(
                 _memory_index, self._facts)
+            started = time.monotonic()
             try:
                 result = await super().handle(task)
             finally:
@@ -584,10 +592,11 @@ class Director(Agent):
                     await self._progress.finish(self._run_id)
             result.attachment = self._report_path
             if self._journal is not None:
-                await self._write_journal(task, result)
+                await self._write_journal(task, result,
+                                          duration_ms=int((time.monotonic() - started) * 1000))
             return result
 
-    async def _write_journal(self, task: Task, result: Result) -> None:
+    async def _write_journal(self, task: Task, result: Result, duration_ms: int = 0) -> None:
         try:
             await asyncio.to_thread(
                 self._journal.record,
@@ -599,6 +608,13 @@ class Director(Agent):
                 iterations=result.iterations,
                 success=result.success,
                 summary=_summary(result.final or result.content),
+                director_in=result.usage.prompt_tokens,
+                director_out=result.usage.completion_tokens,
+                agents_in=self._sub_usage.prompt_tokens,
+                agents_out=self._sub_usage.completion_tokens,
+                cost=result.usage.cost + self._sub_usage.cost,
+                llm_calls=result.usage.calls + self._sub_usage.calls,
+                duration_ms=duration_ms,
             )
             await asyncio.to_thread(
                 self._journal.save_transcript,

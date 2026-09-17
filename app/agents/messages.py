@@ -2,6 +2,8 @@ import uuid
 from enum import Enum
 from pydantic import BaseModel, Field
 
+from app.llm.client import Usage
+
 
 class Decision(str, Enum):
     APPROVED = "approved"
@@ -39,6 +41,8 @@ class Result(BaseModel):
     # Полный ход задачи: то, что реально видела модель. Пишет в журнал только
     # Директор — транскрипты спавнутых агентов умирают вместе с ними.
     transcript: list[dict] = Field(default_factory=list)
+    # Чего стоила работа этого агента: сумма по всем его ходам.
+    usage: Usage = Field(default_factory=Usage)
 
 
 # Аргументы, которые называют цель вызова: сервер, контейнер, проект, сайт, скрипт.

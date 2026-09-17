@@ -59,8 +59,20 @@ class TaskJournal(SqliteStore):
         "task_id TEXT PRIMARY KEY, ts TEXT NOT NULL, body TEXT NOT NULL)",
     )
 
+    # Цена задачи. Ходы Директора и спавнутых агентов — раздельно: модели у них
+    # разные, и без разделения не видно, что дорожает. Старые строки остаются NULL.
+    _COST_COLUMNS = (
+        ("director_in", "INTEGER"), ("director_out", "INTEGER"),
+        ("agents_in", "INTEGER"), ("agents_out", "INTEGER"),
+        ("cost", "REAL"), ("llm_calls", "INTEGER"),
+        ("tool_calls", "INTEGER"), ("spawns", "INTEGER"),
+        ("duration_ms", "INTEGER"),
+    )
+
     def _migrate(self, conn: sqlite3.Connection) -> None:
         self._add_column(conn, "tasks", "summary", "TEXT")
+        for name, decl in self._COST_COLUMNS:
+            self._add_column(conn, "tasks", name, decl)
 
     def record(
         self,
@@ -73,15 +85,28 @@ class TaskJournal(SqliteStore):
         iterations: int,
         success: bool,
         summary: str = "",
+        director_in: int = 0,
+        director_out: int = 0,
+        agents_in: int = 0,
+        agents_out: int = 0,
+        cost: float = 0.0,
+        llm_calls: int = 0,
+        duration_ms: int = 0,
     ) -> None:
         ts = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO tasks "
-                "(id, ts, chat_id, intent, agent, tool_seq, iterations, success, summary) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(id, ts, chat_id, intent, agent, tool_seq, iterations, success, summary, "
+                "director_in, director_out, agents_in, agents_out, cost, llm_calls, "
+                "tool_calls, spawns, duration_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (task_id, ts, chat_id, intent, ",".join(agents),
-                 json.dumps(tool_seq, ensure_ascii=False), iterations, int(success), summary),
+                 json.dumps(tool_seq, ensure_ascii=False), iterations, int(success), summary,
+                 director_in, director_out, agents_in, agents_out, cost, llm_calls,
+                 # Число вызовов и спавнов — это длина уже переданных списков,
+                 # отдельными аргументами их незачем дублировать.
+                 len(tool_seq), len(agents), duration_ms),
             )
             conn.execute("DELETE FROM tasks_fts WHERE id = ?", (task_id,))
             conn.execute(

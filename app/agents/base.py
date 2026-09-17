@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app import audit
 from app.config import settings
-from app.llm.client import LLMClient
+from app.llm.client import LLMClient, Usage
 from app.tools.base import Tool, Safety, INTENT_FIELD
 from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 from app.logging import get_logger, redact
@@ -143,9 +143,11 @@ class Agent:
         said: list[str] = []
         trace: list[str] = []
         iterations = 0
+        usage = Usage()
         for _ in range(settings.agent_max_iterations):
             iterations += 1
             msg = await self._llm.chat(messages, [t.schema() for t in self.tools])
+            usage += msg.usage
             if not msg.tool_calls:
                 content = redact("\n\n".join([*said, msg.content or ""]).strip())
                 if self._memory:
@@ -153,7 +155,7 @@ class Agent:
                     await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
                 return Result(task_id=task.id, content=content,
                               final=redact((msg.content or "").strip()),
-                              trace=trace, iterations=iterations,
+                              trace=trace, iterations=iterations, usage=usage,
                               transcript=[*messages, {"role": "assistant", "content": content}])
             if msg.content:
                 said.append(msg.content)
@@ -209,5 +211,5 @@ class Agent:
             await asyncio.to_thread(self._memory.append, task.chat_id, "user", redact(task.content))
             await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
         return Result(task_id=task.id, content=content, success=False,
-                      final=note, trace=trace, iterations=iterations,
+                      final=note, trace=trace, iterations=iterations, usage=usage,
                       transcript=[*messages, {"role": "assistant", "content": content}])

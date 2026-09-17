@@ -2,11 +2,12 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from pydantic import BaseModel
 
 from app.agents.director import Director
 from app.agents.messages import Task
-from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction
+from app.llm.client import ChoiceMessage, ToolCall, ToolCallFunction, Usage
 from agent_memory.journal import TaskJournal
 from app.skills.loader import Skill
 from app.tools.base import Tool, Safety
@@ -271,3 +272,41 @@ async def test_summary_skips_preambles_of_tool_turns(tmp_path):
     assert j.search("подписка expired")[0]["summary"] == (
         "Разобрал полностью: подписка активна до 2027-03-07."
     )
+
+
+def _two_spawns() -> ChoiceMessage:
+    return ChoiceMessage(content=None, usage=Usage(100, 20, 0.01, 1), tool_calls=[
+        ToolCall(id=f"c{i}", function=ToolCallFunction(
+            name="spawn",
+            arguments=json.dumps({"role": "спец", "skills": ["ops"], "task": t}),
+        ))
+        for i, t in enumerate(["диск", "память"])
+    ])
+
+
+async def test_journal_separates_director_and_agent_cost(tmp_path):
+    """Ш4: токены Директора и спавнутых агентов идут в журнал раздельно."""
+    j = _journal(tmp_path)
+    director = Director(
+        llm=FakeLLM([
+            _two_spawns(),
+            ChoiceMessage(content="диск ок", tool_calls=None, usage=Usage(40, 6, 0.002, 1)),
+            ChoiceMessage(content="память ок", tool_calls=None, usage=Usage(40, 6, 0.002, 1)),
+            ChoiceMessage(content="Всё в порядке.", tool_calls=None, usage=Usage(150, 30, 0.02, 1)),
+        ]),
+        journal=j, skills=_skill_with("host_query"),
+    )
+    await director.handle(Task(content="проверь сервер", chat_id="c1"))
+
+    with sqlite3.connect(str(tmp_path / "tasks.db")) as conn:
+        row = conn.execute(
+            "SELECT director_in, director_out, agents_in, agents_out, cost, llm_calls, "
+            "tool_calls, spawns, duration_ms FROM tasks"
+        ).fetchone()
+    d_in, d_out, a_in, a_out, cost, llm_calls, tool_calls, spawns, duration = row
+    assert (d_in, d_out) == (250, 50)
+    assert (a_in, a_out) == (80, 12)
+    assert cost == pytest.approx(0.034)
+    assert llm_calls == 4
+    assert (tool_calls, spawns) == (2, 2)
+    assert duration >= 0

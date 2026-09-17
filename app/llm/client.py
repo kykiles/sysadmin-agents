@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from openai import AsyncOpenAI, APIError, NOT_GIVEN
 
 
@@ -16,12 +16,34 @@ class ToolCall:
 
 
 @dataclass
+class Usage:
+    """Цена ходов модели: один ответ (`calls=1`) или сумма нескольких.
+
+    `cost` в деньгах даёт не всякий провайдер (OpenRouter — да, в `usage.cost`);
+    если не вернул, остаётся 0, а токены есть всегда.
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost: float = 0.0
+    calls: int = 0
+
+    def __iadd__(self, other: "Usage") -> "Usage":
+        self.prompt_tokens += other.prompt_tokens
+        self.completion_tokens += other.completion_tokens
+        self.cost += other.cost
+        self.calls += other.calls
+        return self
+
+
+@dataclass
 class ChoiceMessage:
     content: str | None
     tool_calls: list[ToolCall] | None
     # Thinking-модели требуют вернуть свои размышления обратно в истории, иначе
     # апстрим отвечает 400. Поле нестандартное — в SDK его нет, только в extra.
     reasoning_content: str | None = None
+    usage: Usage = field(default_factory=Usage)
 
 
 class LLMClient:
@@ -42,6 +64,9 @@ class LLMClient:
                     model=self._model,
                     messages=messages,
                     tools=tools if tools else NOT_GIVEN,
+                    # Без этого OpenRouter вернёт только токены, а цену ходов
+                    # пришлось бы считать по прайсу модели вручную.
+                    extra_body={"usage": {"include": True}},
                 )
                 break
             except APIError as e:
@@ -60,4 +85,18 @@ class LLMClient:
             content=m.content,
             tool_calls=tool_calls,
             reasoning_content=getattr(m, "reasoning_content", None),
+            usage=_usage(resp),
         )
+
+
+def _usage(resp) -> Usage:
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return Usage(calls=1)
+    return Usage(
+        prompt_tokens=getattr(u, "prompt_tokens", 0) or 0,
+        completion_tokens=getattr(u, "completion_tokens", 0) or 0,
+        # Нестандартное поле шлюза: в SDK его нет, в extra приходит числом.
+        cost=float(getattr(u, "cost", 0.0) or 0.0),
+        calls=1,
+    )
