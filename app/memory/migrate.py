@@ -22,6 +22,10 @@ _LEGACY_JOURNAL = "tasks.db"
 _FROM_DIALOG = ("facts", "fact_proposals")
 _FROM_JOURNAL = ("tasks", "transcripts", "lint_seen")
 
+# Факты старой базы — из схемы до периодов действия: одна метка `ts` вместо
+# `valid_from`/`confirmed_at`. Чем заполнить недостающие колонки при копировании.
+_LEGACY_FACTS = {"valid_from": "ts", "confirmed_at": "ts", "origin": "'legacy'"}
+
 
 def migrate_legacy(memory_db: str, *, dialog_db: str) -> dict[str, int]:
     """Перелить старые базы в `memory_db`. Возвращает {таблица: скопировано строк}.
@@ -69,8 +73,12 @@ def _copy(conn: sqlite3.Connection, table: str) -> int:
         return 0
     if conn.execute(f"SELECT 1 FROM main.{table} LIMIT 1").fetchone():
         return 0
-    cols = ", ".join(c for c in dst if c in src)
-    conn.execute(f"INSERT INTO main.{table} ({cols}) SELECT {cols} FROM old.{table}")
+    pairs = [(c, c) for c in dst if c in src]
+    if table == "facts" and "ts" in src:
+        pairs += [(c, e) for c, e in _LEGACY_FACTS.items() if c not in src]
+    cols = ", ".join(c for c, _ in pairs)
+    exprs = ", ".join(e for _, e in pairs)
+    conn.execute(f"INSERT INTO main.{table} ({cols}) SELECT {exprs} FROM old.{table}")
     return conn.execute(f"SELECT count(*) FROM main.{table}").fetchone()[0]
 
 

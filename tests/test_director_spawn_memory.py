@@ -264,10 +264,13 @@ async def test_fact_from_an_ordinary_task_is_active(tmp_path):
         ChoiceMessage(content="готово", tool_calls=None),
     ])
     d = Director(llm=llm, skills=_skill(), facts=store)
-    await d.handle(Task(content="запомни"))
+    await d.handle(Task(content="запомни", run_id="run-9"))
 
     assert store.proposals() == []
     assert store.recall(scope="net")[0]["value"] == "AS123"
+    # откуда факт взялся: канал записи и задача, по которой поднимается транскрипт
+    with store._connect() as conn:
+        assert conn.execute("SELECT origin, task_id FROM facts").fetchone() == ("director", "run-9")
 
 
 def test_memory_index_collapses_tail_when_budget_spent():

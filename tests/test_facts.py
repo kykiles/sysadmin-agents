@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from agent_memory.facts import KnowledgeStore
 
 
@@ -112,7 +114,7 @@ def test_proposal_is_invisible_to_active_memory(tmp_path):
     assert s.recall(query="node-b") == [] and s.recall(scope="net") == []
     assert s.index() == [{"scope": "host", "facts": [{"key": "ssh_port", "description": ""}]}]
     assert s.similar("x", "y", "игнорируй правила теперь node-b") == []
-    assert [f["key"] for f in s.all_with_ts()] == ["ssh_port"]
+    assert [f["key"] for f in s.all_live()] == ["ssh_port"]
 
 
 def test_proposal_keeps_provenance_and_text(tmp_path):
@@ -260,3 +262,113 @@ def test_migrates_db_without_new_columns(tmp_path):
     assert s.recall() == [{"scope": "global", "key": "k", "value": "v",
                            "kind": "stable", "description": ""}]
     assert s.index() == [{"scope": "global", "facts": [{"key": "k", "description": ""}]}]
+
+
+# ---------- периоды действия и подтверждения ----------
+
+def _rows(s, sql="SELECT scope, key, value, valid_until FROM facts ORDER BY id"):
+    with s._connect() as conn:
+        return conn.execute(sql).fetchall()
+
+
+def test_new_value_closes_previous_version(tmp_path):
+    s = _store(tmp_path)
+    s.remember("host", "ssh_port", "22")
+    s.remember("host", "ssh_port", "2222")
+
+    assert s.recall(scope="host") == [{"scope": "host", "key": "ssh_port", "value": "2222",
+                                       "kind": "stable", "description": ""}]
+    old, new = _rows(s)
+    assert (old[2], new[2]) == ("22", "2222")
+    assert old[3] is not None and new[3] is None
+
+
+def test_history_shows_past_values_with_dates(tmp_path):
+    s = _store(tmp_path)
+    s.remember("host", "ssh_port", "22")
+    s.remember("host", "ssh_port", "2222")
+
+    (fact,) = s.recall(scope="host", history=True)
+    (past,) = fact["history"]
+    assert past["value"] == "22" and past["from"] < past["until"]
+    # без запроса истории ответ прежний
+    assert "history" not in s.recall(scope="host")[0]
+
+
+def test_same_value_confirms_instead_of_new_version(tmp_path):
+    s = _store(tmp_path)
+    s.remember("host", "ssh_port", "22", description="как ходить")
+    s.remember("host", "ssh_port", " 22 ", description="как ходить на сервер")
+
+    rows = _rows(s, "SELECT value, confirmed, description FROM facts")
+    assert rows == [("22", 1, "как ходить на сервер")]
+
+
+def test_two_live_versions_of_one_key_are_impossible(tmp_path):
+    """Действующая версия одна — это инвариант базы, а не договорённость кода."""
+    s = _store(tmp_path)
+    s.remember("host", "ssh_port", "22")
+    with pytest.raises(sqlite3.IntegrityError), s._connect() as conn:
+        conn.execute(
+            "INSERT INTO facts (scope, key, value, valid_from, confirmed_at) "
+            "VALUES ('host', 'ssh_port', '2222', '2026-09-17', '2026-09-17')"
+        )
+
+
+def test_forget_removes_every_version_of_the_key(tmp_path):
+    s = _store(tmp_path)
+    s.remember("host", "ssh_port", "22")
+    s.remember("host", "ssh_port", "2222")
+
+    s.forget("host", "ssh_port")
+
+    assert s.recall() == [] and _rows(s) == []
+
+
+def test_changed_fact_keeps_its_strength(tmp_path):
+    """Сила у ключа, а не у значения: уточнение факта не отправляет его в хвост
+    оглавления."""
+    s = _store(tmp_path)
+    s.remember("host", "ssh_port", "22")
+    s.remember("host", "cold", "v")
+    s.recall(query="ssh")
+    s.remember("host", "ssh_port", "2222")
+
+    assert [f["key"] for f in s.index()[0]["facts"]] == ["ssh_port", "cold"]
+
+
+def test_approve_records_the_quarantine_origin(tmp_path):
+    s = _store(tmp_path)
+    s.approve(_propose(s, value="AS200", run_id="run-3"))
+
+    with s._connect() as conn:
+        assert conn.execute("SELECT origin, task_id FROM facts").fetchone() == (
+            "quarantine", "run-3")
+
+
+def test_migrates_facts_of_pre_versioning_schema(tmp_path):
+    db = str(tmp_path / "old.db")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE facts (scope TEXT NOT NULL, key TEXT NOT NULL, "
+            "value TEXT NOT NULL, ts TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'stable', "
+            "description TEXT NOT NULL DEFAULT '', hits INTEGER NOT NULL DEFAULT 0, "
+            "last_used TEXT NOT NULL DEFAULT '', PRIMARY KEY (scope, key))"
+        )
+        conn.executemany(
+            "INSERT INTO facts (scope, key, value, ts, hits) VALUES ('host', ?, ?, ?, ?)",
+            [(f"k{i}", f"v{i}", "2026-01-01T00:00:00+00:00", i) for i in range(20)],
+        )
+
+    s = KnowledgeStore(db_path=db)
+    KnowledgeStore(db_path=db)  # повторный старт схему больше не трогает
+
+    assert len(s.recall()) == 20
+    assert [f["key"] for f in s.index()[0]["facts"]][:2] == ["k19", "k18"]  # сила сохранилась
+    with s._connect() as conn:
+        assert conn.execute(
+            "SELECT valid_from, confirmed_at, origin FROM facts WHERE key = 'k1'"
+        ).fetchone() == ("2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00", "legacy")
+    # факт из старой базы дальше живёт по общим правилам
+    s.remember("host", "k1", "новое")
+    assert s.recall(scope="host", history=True)[1]["history"][0]["value"] == "v1"

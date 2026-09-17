@@ -12,10 +12,10 @@ def _setup(tmp_path):
 
 
 def _age(store, scope: str, key: str, days: int) -> None:
-    """Отодвигаем ts факта в прошлое — remember() всегда ставит now."""
+    """Отодвигаем подтверждение факта в прошлое — remember() всегда ставит now."""
     ts = (NOW - timedelta(days=days)).isoformat()
     with store._connect() as conn:
-        conn.execute("UPDATE facts SET ts = ? WHERE scope = ? AND key = ?", (ts, scope, key))
+        conn.execute("UPDATE facts SET confirmed_at = ? WHERE scope = ? AND key = ?", (ts, scope, key))
 
 
 def test_snapshot_goes_stale_earlier_than_stable(tmp_path):
@@ -85,7 +85,7 @@ def test_broken_ts_is_skipped_not_crashing(tmp_path):
     store, state = _setup(tmp_path)
     store.remember("host-a", "ssh_port", "2222", kind="snapshot")
     with store._connect() as conn:
-        conn.execute("UPDATE facts SET ts = 'not-a-date'")
+        conn.execute("UPDATE facts SET confirmed_at = 'not-a-date'")
 
     assert find_stale(store, state, now=NOW, **DEFAULTS) == []
 
@@ -100,3 +100,17 @@ def test_lint_does_not_modify_facts(tmp_path):
     assert store.recall() == [
         {"scope": "host-a", "key": "ssh_port", "value": "2222", "kind": "snapshot", "description": ""}
     ]
+
+
+def test_confirmation_makes_a_fact_fresh_again(tmp_path):
+    """Возраст считается от подтверждения: записанное давно, но подтверждённое
+    сегодня знание не устарело."""
+    store, state = _setup(tmp_path)
+    store.remember("host-a", "ssh_port", "2222", kind="snapshot")
+    _age(store, "host-a", "ssh_port", 20)
+    assert [f.key for f in find_stale(store, state, now=NOW, **DEFAULTS)] == ["ssh_port"]
+
+    store.remember("host-a", "ssh_port", "2222")  # то же значение — подтверждение
+    _age(store, "host-a", "ssh_port", 1)
+
+    assert find_stale(store, state, now=NOW, **DEFAULTS) == []

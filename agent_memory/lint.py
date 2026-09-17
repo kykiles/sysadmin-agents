@@ -73,13 +73,15 @@ def find_stale(
     recently_shown = state.reported_since(now - timedelta(days=remind_days))
 
     stale: list[StaleFact] = []
-    for fact in store.all_with_ts():
+    for fact in store.all_live():
         if (fact["scope"], fact["key"]) in recently_shown:
             continue
-        age = _age_days(fact["ts"], now)
+        # Возраст — от последнего подтверждения: факт, записанный полгода назад,
+        # но подтверждённый вчера, не устарел.
+        age = _age_days(fact["confirmed_at"], now)
         if age is None:
-            log.warning("bad_fact_ts scope=%s key=%s ts=%s",
-                        fact["scope"], fact["key"], fact["ts"])
+            log.warning("bad_fact_ts scope=%s key=%s confirmed_at=%s",
+                        fact["scope"], fact["key"], fact["confirmed_at"])
             continue
         limit = snapshot_days if fact["kind"] == "snapshot" else stable_days
         if age >= limit:

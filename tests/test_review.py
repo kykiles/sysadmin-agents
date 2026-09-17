@@ -23,7 +23,7 @@ def _seed_stale_fact(ctx, days=40):
     ctx.facts.remember("host-a", "ssh_port", "2222", kind="snapshot")
     old = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with ctx.facts._connect() as conn:
-        conn.execute("UPDATE facts SET ts = ?", (old,))
+        conn.execute("UPDATE facts SET confirmed_at = ?", (old,))
 
 
 # ---------- проход целиком ----------

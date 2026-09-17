@@ -29,26 +29,32 @@ class RememberParams(BaseModel):
 class RecallParams(BaseModel):
     scope: str | None = Field(default=None, description="filter by scope (topic)")
     query: str | None = Field(default=None, description="substring filter over key, value and description")
+    history: bool = Field(
+        default=False,
+        description="also return the previous values of each fact with the dates they "
+                    "were valid — use when it matters whether a fact changed",
+    )
 
 
 def build_tools(store: KnowledgeStore,
-                provenance: Callable[[], dict | None] | None = None) -> list[Tool]:
+                provenance: Callable[[], dict] | None = None) -> list[Tool]:
     """Инструменты памяти. Не скилл: память принадлежит Директору и временным
     агентам не выдаётся — забывать факты человек решает кнопкой в Telegram.
 
-    `provenance` — происхождение текущей задачи: None, если недоверенного вывода
-    в ней не было, иначе {"run_id", "source"}. Назначает его код Директора, а не
-    модель. Факт из такой задачи уходит в карантин и становится знанием только
-    после одобрения владельцем: подтверждать каждую запись слишком дорого, а молча
-    верить веб-странице, которая осядет в памяти навсегда, нельзя.
+    `provenance` — происхождение текущей задачи: {"run_id", "source"}, где `source`
+    пуст, если недоверенного вывода в задаче не было. Назначает его код Директора,
+    а не модель. Факт из недоверенной задачи уходит в карантин и становится знанием
+    только после одобрения владельцем: подтверждать каждую запись слишком дорого, а
+    молча верить веб-странице, которая осядет в памяти навсегда, нельзя.
     """
 
-    async def recall_facts(scope: str | None = None, query: str | None = None) -> dict:
-        return {"facts": store.recall(scope=scope, query=query)}
+    async def recall_facts(scope: str | None = None, query: str | None = None,
+                           history: bool = False) -> dict:
+        return {"facts": store.recall(scope=scope, query=query, history=history)}
 
     async def remember_fact(scope: str, key: str, value: str, description: str = "",
                             kind: str = "stable") -> dict:
-        origin = provenance() if provenance else None
+        origin = provenance() if provenance else {}
         # память переживает задачу и уходит в каждый следующий промпт — без секретов
         value, description = redact(value), redact(description)
         # Похожие ищем ДО записи, иначе новый факт найдёт сам себя.
@@ -58,8 +64,9 @@ def build_tools(store: KnowledgeStore,
         # отчитаться пользователю о служебной записи вместо ответа на вопрос.
         note = "служебная запись; пользователю о ней не сообщай — ответь на его задачу"
         fact = {"scope": scope, "key": key, "value": value, "kind": kind}
-        if origin is None:
-            store.remember(scope, key, value, kind, description=description)
+        if not origin.get("source"):
+            store.remember(scope, key, value, kind, description=description,
+                           task_id=origin.get("run_id", ""))
             out = {"remembered": fact, "note": note}
         else:
             store.propose(scope, key, value, run_id=origin["run_id"], tool="remember_fact",
@@ -78,5 +85,5 @@ def build_tools(store: KnowledgeStore,
 
     return [
         Tool("recall_facts", "Recall stored facts (all, by scope, or by query substring). Safe.", RecallParams, recall_facts, Safety.SAFE),
-        Tool("remember_fact", "Store a durable fact that will be needed in a future task (upserts by scope+key). Safe.", RememberParams, remember_fact, Safety.SAFE),
+        Tool("remember_fact", "Store a durable fact that will be needed in a future task. Writing the same value again confirms it; a different value supersedes it, the old one is kept as history. Safe.", RememberParams, remember_fact, Safety.SAFE),
     ]

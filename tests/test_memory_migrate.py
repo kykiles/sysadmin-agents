@@ -83,6 +83,8 @@ def test_facts_of_older_schema_are_copied(tmp_path):
     assert facts.recall() == [
         {"scope": "host", "key": "ip", "value": "1.2.3.4", "kind": "stable", "description": ""}
     ]
+    # у старых фактов одна метка ts вместо периодов — становятся действующими
+    assert facts.all_live()[0]["confirmed_at"] == "2026-01-01T00:00:00"
 
 
 def test_fts_rebuilt_when_tasks_arrived_without_it(tmp_path):

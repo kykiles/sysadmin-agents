@@ -69,7 +69,7 @@ async def run_review(ctx: LearningContext) -> ReviewOutcome:
 
 
 def resolve_fact(facts, sid: str) -> tuple[str, str] | None:
-    for f in facts.all_with_ts():
+    for f in facts.all_live():
         if short_id(f["scope"], f["key"]) == sid:
             return f["scope"], f["key"]
     return None

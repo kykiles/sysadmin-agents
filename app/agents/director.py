@@ -554,12 +554,13 @@ class Director(Agent):
         self._report_path: str = ""
         self._run_id: str = ""
 
-    def _provenance(self) -> dict | None:
-        """Происхождение записей памяти в текущей задаче: None — недоверенного
-        вывода не было. Флаг на весь run консервативен; точнее — T09."""
-        if not self._untrusted_skills:
-            return None
-        return {"run_id": self._run_id, "source": "spawn:" + ",".join(sorted(self._untrusted_skills))}
+    def _provenance(self) -> dict:
+        """Происхождение записей памяти в текущей задаче: задача журнала, а в
+        `source` — недоверенные навыки, если они работали (пусто — не работали).
+        Флаг на весь run консервативен; точнее — T09."""
+        source = ("spawn:" + ",".join(sorted(self._untrusted_skills))
+                  if self._untrusted_skills else "")
+        return {"run_id": self._run_id, "source": source}
 
     def reload_library(self, skills: dict) -> None:
         """Подхватить обновлённые навыки без рестарта процесса."""

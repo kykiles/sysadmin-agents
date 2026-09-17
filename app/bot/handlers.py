@@ -120,7 +120,8 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         fact = learning.pending.pop(sid, None) if learning else None
         if fact is not None:
             learning.facts.remember(fact["scope"], fact["key"], fact["value"],
-                                    description=fact.get("description", ""))
+                                    description=fact.get("description", ""),
+                                    origin="consolidation")
         await callback.answer("Записано" if fact else "Предложение устарело")
 
     @router.callback_query(F.data.startswith("lf:"))
