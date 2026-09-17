@@ -69,9 +69,13 @@ class TaskJournal(SqliteStore):
         ("duration_ms", "INTEGER"),
     )
 
+    # Эпизод задачи: чем кончилась и что по дороге не вышло. Собирает код, а не
+    # модель, — поэтому это не второй `success`, который почти всегда единица.
+    _EPISODE_COLUMNS = (("outcome", "TEXT"), ("problems", "TEXT"))
+
     def _migrate(self, conn: sqlite3.Connection) -> None:
         self._add_column(conn, "tasks", "summary", "TEXT")
-        for name, decl in self._COST_COLUMNS:
+        for name, decl in (*self._COST_COLUMNS, *self._EPISODE_COLUMNS):
             self._add_column(conn, "tasks", name, decl)
 
     def record(
@@ -92,6 +96,8 @@ class TaskJournal(SqliteStore):
         cost: float = 0.0,
         llm_calls: int = 0,
         duration_ms: int = 0,
+        outcome: str = "ok",
+        problems: list[str] | None = None,
     ) -> None:
         ts = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
@@ -99,14 +105,15 @@ class TaskJournal(SqliteStore):
                 "INSERT OR REPLACE INTO tasks "
                 "(id, ts, chat_id, intent, agent, tool_seq, iterations, success, summary, "
                 "director_in, director_out, agents_in, agents_out, cost, llm_calls, "
-                "tool_calls, spawns, duration_ms) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "tool_calls, spawns, duration_ms, outcome, problems) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (task_id, ts, chat_id, intent, ",".join(agents),
                  json.dumps(tool_seq, ensure_ascii=False), iterations, int(success), summary,
                  director_in, director_out, agents_in, agents_out, cost, llm_calls,
                  # Число вызовов и спавнов — это длина уже переданных списков,
                  # отдельными аргументами их незачем дублировать.
-                 len(tool_seq), len(agents), duration_ms),
+                 len(tool_seq), len(agents), duration_ms,
+                 outcome, json.dumps(problems or [], ensure_ascii=False)),
             )
             conn.execute("DELETE FROM tasks_fts WHERE id = ?", (task_id,))
             conn.execute(
@@ -117,17 +124,18 @@ class TaskJournal(SqliteStore):
     def search(self, query: str, limit: int = 3) -> list[dict]:
         """Похожие задачи из прошлого, лучшие по bm25.
 
-        Возвращаем интент, итог одной фразой и навыки. Признак успеха не отдаём:
-        на живом журнале он оказался единицей в 89 случаях из 90 — ставится по
-        «Директор дошёл до ответа», а не «получилось», и как сигнал бесполезен.
-        Трасса инструментов остаётся в журнале, Директору она шум.
+        Возвращаем интент, итог одной фразой, навыки и эпизод: чем кончилось и что
+        по дороге не вышло. Признак `success` не отдаём: на живом журнале он оказался
+        единицей в 89 случаях из 90 — ставится по «Директор дошёл до ответа», а не
+        «получилось». Задачи старше Ш6 приходят без эпизода — пустых полей не
+        придумываем. Трасса инструментов остаётся в журнале, Директору она шум.
         """
         match = _match_query(query)
         if not match:
             return []
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT f.id, f.intent, f.summary, t.agent, t.success "
+                "SELECT f.intent, f.summary, t.agent, t.outcome, t.problems "
                 "FROM tasks_fts f JOIN tasks t ON t.id = f.id "
                 "WHERE tasks_fts MATCH ? ORDER BY bm25(tasks_fts) LIMIT ?",
                 (match, limit),
@@ -135,8 +143,10 @@ class TaskJournal(SqliteStore):
         return [
             {"intent": intent, "summary": summary or "",
              "skills": sorted({s for a in (agent or "").split(",") if a
-                               for s in a.removeprefix("spawned:").split("+")})}
-            for _i, intent, summary, agent, _ok in rows
+                               for s in a.removeprefix("spawned:").split("+")}),
+             **({"outcome": outcome} if outcome else {}),
+             **({"problems": found} if (found := json.loads(problems or "[]")) else {})}
+            for intent, summary, agent, outcome, problems in rows
         ]
 
     def recent(self, hours: int) -> list[dict]:

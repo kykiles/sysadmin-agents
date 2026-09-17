@@ -12,6 +12,7 @@ import yaml
 from pydantic import BaseModel, Field
 from app.agents.base import Agent
 from app.agents.loader import compose_prompt
+from app.agents.episode import Episode
 from app.agents.messages import Task, Result
 from app.bot.reports import save_report
 from app.config import settings
@@ -93,8 +94,10 @@ _WRITE_SKILL_BLOCK = (
 
 _EXPERIENCE_BLOCK = (
     "\n\nОпыт прошлых задач: если задача похожа на уже сделанное, начни с "
-    "recall_experience — вернутся прошлые формулировки, итог одной фразой и какими "
-    "навыками решали.\n\n"
+    "recall_experience — вернутся прошлые формулировки, итог одной фразой, какими "
+    "навыками решали и что тогда не вышло: на что пользователь не дал добро, какие "
+    "инструменты падали, какие пункты плана остались несделанными. Это подсказка, "
+    "а не запрет: похожая задача могла упереться в то же самое.\n\n"
 )
 
 
@@ -408,6 +411,7 @@ class Director(Agent):
                 tools=list(uniq.values()),
                 llm=agent_llm,
                 gateway=gateway,
+                episode=self._episode,
             )
             # Вывод такого агента вернётся в контекст Директора: всё, что он запишет
             # в память по итогам этой задачи, уходит в карантин (аудит F09).
@@ -516,7 +520,8 @@ class Director(Agent):
                 name="recall_experience",
                 description=(
                     "Recall how similar tasks were solved before: past intents, one-line "
-                    "outcomes, skills used and whether they succeeded. Safe."
+                    "outcomes, skills used, and what went wrong then — refused confirmations, "
+                    "tool errors, plan steps left undone. Safe."
                 ),
                 params_model=RecallExperienceParams,
                 fn=_recall_experience,
@@ -580,21 +585,32 @@ class Director(Agent):
             self._untrusted_skills = set()
             self._report_path = ""
             self._run_id = task.run_id or task.id
+            self._episode = Episode()
             self.system_prompt = self._base_prompt + await asyncio.to_thread(
                 _memory_index, self._facts)
             started = time.monotonic()
+            # Отмена задачи (BaseException) сюда не попадёт — журналу тогда нечего
+            # писать, и None это говорит вместо падения в finally.
+            result: Result | None = None
             try:
                 result = await super().handle(task)
+            except Exception as e:
+                # Упавшая задача — самый ценный эпизод, и раньше она в журнал не
+                # попадала вовсе: ответ пользователю рисует обработчик сообщения.
+                self._episode.broke(f"задача оборвалась: {type(e).__name__}: {e}")
+                result = Result(task_id=task.id, content=str(e), success=False)
+                raise
             finally:
                 # «Yes to all» живёт до конца ответа — и при ошибке, и при отмене.
                 if self._gateway is not None:
                     self._gateway.release(self._run_id)
                 if self._progress is not None:
-                    await self._progress.finish(self._run_id)
+                    self._episode.plan_left(await self._progress.finish(self._run_id))
+                if self._journal is not None and result is not None:
+                    await self._write_journal(
+                        task, result,
+                        duration_ms=int((time.monotonic() - started) * 1000))
             result.attachment = self._report_path
-            if self._journal is not None:
-                await self._write_journal(task, result,
-                                          duration_ms=int((time.monotonic() - started) * 1000))
             return result
 
     async def _write_journal(self, task: Task, result: Result, duration_ms: int = 0) -> None:
@@ -616,6 +632,8 @@ class Director(Agent):
                 cost=result.usage.cost + self._sub_usage.cost,
                 llm_calls=result.usage.calls + self._sub_usage.calls,
                 duration_ms=duration_ms,
+                outcome=self._episode.outcome(),
+                problems=[redact(p) for p in self._episode.problems()],
             )
             await asyncio.to_thread(
                 self._journal.save_transcript,

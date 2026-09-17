@@ -11,6 +11,7 @@ from app.config import settings
 from app.llm.client import LLMClient, Usage
 from app.tools.base import Tool, Safety, INTENT_FIELD
 from app.agents.messages import Task, Result, ConfirmationRequest, Decision
+from app.agents.episode import Episode, error_of
 from app.logging import get_logger, redact
 
 log = get_logger("agent")
@@ -52,6 +53,7 @@ class Agent:
         llm: LLMClient,
         gateway=None,
         memory=None,
+        episode: Episode | None = None,
     ):
         self.name = name
         self.system_prompt = system_prompt
@@ -61,6 +63,9 @@ class Agent:
         # Без него опасные вызовы отклоняются — агент не может действовать вслепую.
         self._gateway = gateway
         self._memory = memory
+        # Что за задачу пошло не так. Директор передаёт сюда свой эпизод при
+        # спавне, поэтому проблемы агентов попадают в тот же журнал.
+        self._episode = episode or Episode()
         # Имя у двух параллельных спавнов с одинаковыми навыками совпадает — id нет.
         self.agent_id = f"{name}#{uuid.uuid4().hex[:8]}"
 
@@ -78,24 +83,36 @@ class Agent:
                 out = json.dumps({"error": f"invalid tool arguments: {e}"})
             else:
                 out = await tool.execute(args)
+        self._note(tc.function.name, out)
         log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=redact(str(out))[:200])
         return out
+
+    def _note(self, tool: str, out: str) -> None:
+        if (problem := error_of(out)) is not None:
+            self._episode.tool_error(tool, problem)
+        else:
+            self._episode.tool_ok(tool)
 
     async def _run_dangerous(self, task: Task, tc, tool: Tool, reason: str) -> str:
         try:
             raw = parse_args(tc.function.arguments)
         except json.JSONDecodeError as e:
-            return json.dumps({"error": f"invalid tool arguments: {e}"})
+            out = json.dumps({"error": f"invalid tool arguments: {e}"})
+            self._note(tool.name, out)
+            return out
         intent = str(raw.get(INTENT_FIELD, "") or "").strip()
         # Подтверждается и исполняется один снимок: подготовлен до запроса, человеку
         # уходит копия, исполняется оригинал, который из агента не выходил (аудит F04/F05).
         try:
             prepared = tool.prepare(raw)
         except ValidationError as e:
-            return json.dumps({"error": e.errors(include_url=False, include_context=False)},
-                              ensure_ascii=False)
+            out = json.dumps({"error": e.errors(include_url=False, include_context=False)},
+                             ensure_ascii=False)
+            self._note(tool.name, out)
+            return out
         if tool.precheck is not None and (problem := await tool.precheck(prepared)):
             out = json.dumps({"error": problem}, ensure_ascii=False)
+            self._note(tool.name, out)
             log.info("tool_call", agent=self.name, tool=tool.name, result_preview=redact(out)[:200])
             return out
         req = ConfirmationRequest(
@@ -114,7 +131,10 @@ class Agent:
         )
         if decision.approved:
             out = await tool.invoke(prepared)
+            self._note(tool.name, out)
         else:
+            # Отказ — не ошибка инструмента: он и есть итог, повтор его не исправит.
+            self._episode.refusal(req.scope() or tool.name)
             out = json.dumps({"error": (
                 "not approved: пользователь отказал, не ответил или запрос не доставлен. "
                 "Не повторяй этот вызов — такой же запрос в этой задаче отклоняется без вопроса. "
@@ -206,6 +226,7 @@ class Agent:
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
         limit = settings.agent_max_iterations
         note = f"достигнут лимит итераций ({limit}), ответ может быть неполным"
+        self._episode.broke(f"{self.name}: {note}")
         content = redact("\n\n".join([*said, note]))
         if self._memory:
             await asyncio.to_thread(self._memory.append, task.chat_id, "user", redact(task.content))

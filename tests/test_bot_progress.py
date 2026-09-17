@@ -138,3 +138,22 @@ async def test_telegram_failure_does_not_break_task():
     await p.plan("r", "t", ["Один"])
     await p.started("r", [1], "a#1")
     await p.finish("r")
+
+
+async def test_finish_returns_unfinished_steps_for_the_episode():
+    """Ш6: итог доски — вход эпизода задачи."""
+    p, bot = _progress()
+    await p.plan("r", "t", ["Найти проект", "Пересобрать", "Проверить"])
+    await p.started("r", [1, 2], "a#1")
+    await p.mark("a#1", 1, "done")
+    await p.mark("a#1", 2, "failed")
+    await p.finished("a#1")
+    assert await p.finish("r") == [
+        "пункт «Пересобрать» — не выполнено",
+        "пункт «Проверить» — пропущен",
+    ]
+
+
+async def test_finish_without_board_returns_nothing():
+    p, _bot = _progress()
+    assert await p.finish("r") == []

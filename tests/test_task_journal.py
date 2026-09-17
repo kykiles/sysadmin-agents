@@ -310,3 +310,121 @@ async def test_journal_separates_director_and_agent_cost(tmp_path):
     assert llm_calls == 4
     assert (tool_calls, spawns) == (2, 2)
     assert duration >= 0
+
+
+# ---------- Ш6: эпизод задачи ----------
+
+def _progress_bot():
+    from unittest.mock import AsyncMock, MagicMock
+    from app.bot.progress import TelegramProgress
+
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=7))
+    bot.edit_message_text = AsyncMock()
+    return TelegramProgress(bot, 1), bot
+
+
+def _episode_of(tmp_path) -> tuple[str, list]:
+    with sqlite3.connect(str(tmp_path / "tasks.db")) as conn:
+        outcome, problems = conn.execute(
+            "SELECT outcome, problems FROM tasks").fetchone()
+    return outcome, json.loads(problems)
+
+
+def _skill_failing(tool_name: str, error: str) -> dict[str, Skill]:
+    async def _fail() -> dict:
+        return {"error": error}
+
+    return {"ops": Skill(name="ops", description="операции", instructions="## ops",
+                         tools=[Tool(tool_name, "t", _P, _fail, Safety.SAFE)])}
+
+
+async def test_clean_task_is_recorded_as_ok(tmp_path):
+    j = _journal(tmp_path)
+    director = Director(
+        llm=FakeLLM([
+            _spawn_call("посчитай"), _sub_calls("rw_query"),
+            ChoiceMessage(content="42", tool_calls=None),
+            ChoiceMessage(content="42 юзера.", tool_calls=None),
+        ]),
+        journal=j, skills=_skill_with("rw_query"),
+    )
+    await director.handle(Task(content="сколько юзеров", chat_id="c1"))
+    assert _episode_of(tmp_path) == ("ok", [])
+
+
+async def test_agent_tool_error_makes_task_partial(tmp_path):
+    """Проблемы спавнутого агента — проблемы задачи: эпизод у них общий."""
+    j = _journal(tmp_path)
+    director = Director(
+        llm=FakeLLM([
+            _spawn_call("посмотри"), _sub_calls("rw_query"),
+            ChoiceMessage(content="база не отвечает", tool_calls=None),
+            ChoiceMessage(content="Не получилось: база не отвечает.", tool_calls=None),
+        ]),
+        journal=j, skills=_skill_failing("rw_query", "connection refused"),
+    )
+    await director.handle(Task(content="сколько юзеров", chat_id="c1"))
+    assert _episode_of(tmp_path) == ("partial", ["ошибка rw_query: connection refused"])
+
+
+async def test_unfinished_plan_step_lands_in_problems(tmp_path):
+    j = _journal(tmp_path)
+    progress, _bot = _progress_bot()
+    director_llm = FakeLLM([
+        ChoiceMessage(content=None, tool_calls=[ToolCall(id="p1", function=ToolCallFunction(
+            name="plan",
+            arguments=json.dumps({"title": "Проверка", "steps": ["Снять метрики", "Починить"]})))]),
+        ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(
+            name="spawn",
+            arguments=json.dumps({"role": "спец", "skills": ["ops"], "task": "сними",
+                                  "steps": [1]})))]),
+        ChoiceMessage(content="Метрики сняты, чинить не стал.", tool_calls=None),
+    ])
+    agent_llm = FakeLLM([
+        ChoiceMessage(content=None, tool_calls=[ToolCall(id="m1", function=ToolCallFunction(
+            name="mark_step", arguments=json.dumps({"step": 1, "status": "done"})))]),
+        ChoiceMessage(content="снял", tool_calls=None),
+    ])
+    director = Director(llm=director_llm, agent_llm=agent_llm, journal=j,
+                        skills=_skill_with("rw_query"), progress=progress)
+    await director.handle(Task(content="проверь сервер", chat_id="c1"))
+
+    assert _episode_of(tmp_path) == ("partial", ["пункт «Починить» — пропущен"])
+
+
+async def test_crashed_task_is_recorded_as_failed(tmp_path):
+    class BrokenLLM:
+        async def chat(self, messages, tools=None):
+            raise RuntimeError("provider is down")
+
+    j = _journal(tmp_path)
+    director = Director(llm=BrokenLLM(), journal=j)
+    with pytest.raises(RuntimeError):
+        await director.handle(Task(content="проверь диск", chat_id="c1"))
+
+    outcome, problems = _episode_of(tmp_path)
+    assert outcome == "failed"
+    assert problems == ["задача оборвалась: RuntimeError: provider is down"]
+
+
+def test_search_returns_episode_and_skips_it_for_old_tasks(tmp_path):
+    path = str(tmp_path / "tasks.db")
+    j = TaskJournal(path)
+    j.record(task_id="t1", chat_id="c1", intent="перезапусти панель", agents=[],
+             tool_seq=[], iterations=2, success=True, summary="Не перезапустил.",
+             outcome="partial", problems=["отказ в подтверждении: docker_restart: container=panel"])
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO tasks (id, ts, chat_id, intent, agent, tool_seq, iterations, success, "
+            "summary) VALUES ('old', ?, 'c1', 'проверь сертификат', '', '[]', 1, 1, 'Ок.')",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        conn.execute("INSERT INTO tasks_fts (id, intent, summary) "
+                     "VALUES ('old', 'проверь сертификат', 'Ок.')")
+
+    found = j.search("перезапусти панель")[0]
+    assert found["outcome"] == "partial"
+    assert found["problems"] == ["отказ в подтверждении: docker_restart: container=panel"]
+    # задача старше Ш6: пустого эпизода не выдумываем
+    assert set(j.search("сертификат")[0]) == {"intent", "summary", "skills"}

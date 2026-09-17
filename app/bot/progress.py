@@ -144,21 +144,26 @@ class TelegramProgress:
         step.waiting = max(0, step.waiting + (1 if on else -1))
         await self._show(board)
 
-    async def finish(self, run_id: str) -> None:
+    async def finish(self, run_id: str) -> list[str]:
         """Задача закончилась. Неотмеченный пункт: «не выполнено», если на нём остался
         работающий агент (задача упала или её отменили), иначе «пропущен» — его никто
-        не выполнил."""
+        не выполнил.
+
+        Возвращает итог доски для эпизода задачи: пункты, которые не сделаны.
+        """
         board = self._boards.pop(run_id, None)
         mine = {a for a, (r, _) in self._agents.items() if r == run_id}
         self._agents = {a: v for a, v in self._agents.items() if a not in mine}
         self._refused = {(a, i) for a, i in self._refused if a not in mine}
         if board is None:
-            return
+            return []
         for s in board.steps:
             if s.status == "pending":
                 s.status = "failed" if s.active or s.waiting else "skipped"
             s.active = s.waiting = 0
         await self._show(board)
+        return [f"пункт «{s.text}» — {_NOTES[s.status]}"
+                for s in board.steps if s.status in _NOTES]
 
     def _current(self, agent_id: str) -> tuple[_Board, int] | None:
         """Пункт, над которым агент сейчас работает: пункты он ведёт по порядку,
