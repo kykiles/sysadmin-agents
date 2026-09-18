@@ -365,6 +365,38 @@ _OPENSSL = Argv(single_dash=True, subcommands={
                     single_dash=True),
 })
 
+# Git: только метаданные — статус, история, какие файлы менялись. Содержимое диффов
+# (`log -p`, `diff`, `show` с патчем) — через shell_exec: в репозитории бывает
+# закоммиченный .env. `-c`, `--output`, `--ext-diff` в контракт не входят; `rev:path`
+# (двоеточие) не проходит по формату ревизии. Без remote -v: в URL бывает токен.
+_GIT_REV = _re(r"[A-Za-z0-9][A-Za-z0-9._/@^~{}-]*")
+_GIT_REVS = _each(lambda p: _GIT_REV(p) and not _secret(p))
+_GIT_FILES_ONLY = _opts("--stat", "--shortstat", "--name-only", "--name-status")
+_GIT = Argv(
+    flags=_opts("--no-pager"),
+    valued={"-C": _word},
+    subcommands={
+        "status": Argv(flags=_opts("-s", "--short", "-b", "--branch", "--porcelain")),
+        "log": Argv(flags=_opts("--oneline", "--graph", "--all", "--no-merges", "--decorate",
+                                "--first-parent", "--reverse") | _GIT_FILES_ONLY,
+                    valued={"-n": _INT, "--max-count": _INT, "--since": _any, "--until": _any,
+                            "--author": _any, "--format": _any},
+                    positional=_GIT_REVS),
+        "show": Argv(flags=_opts("--oneline", "-s", "--no-patch") | _GIT_FILES_ONLY,
+                     valued={"--format": _any},
+                     positional=_GIT_REVS,
+                     require=_opts("-s", "--no-patch") | _GIT_FILES_ONLY),
+        "diff": Argv(flags=_opts("--cached", "--staged") | _GIT_FILES_ONLY,
+                     positional=_GIT_REVS, require=_GIT_FILES_ONLY),
+        # без позиционных: `git branch NAME` создаёт ветку
+        "branch": Argv(flags=_opts("-a", "--all", "-r", "--remotes", "-v", "--verbose",
+                                   "--list", "--show-current")),
+        "rev-parse": Argv(flags=_opts("--abbrev-ref", "--short", "--show-toplevel",
+                                      "--is-inside-work-tree"),
+                          positional=_upto(1, _GIT_REV)),
+    },
+)
+
 _SPECS: dict[str, Argv] = {
     # состояние системы
     "df": Argv(flags=_opts("-h", "-H", "-T", "-i", "-a", "-l", "-P", "-k",
@@ -540,6 +572,11 @@ _SPECS: dict[str, Argv] = {
     }),
     # На ноде docker доступен только через ssh, сокета у нас там нет.
     "docker": _DOCKER,
+    # только проверка/дамп конфига и версия: без них nginx запустил бы мастер,
+    # -s шлёт сигнал, -g добавляет директивы (load_module), -c/-p подменяют конфиг
+    "nginx": Argv(flags=_opts("-t", "-T", "-q", "-v", "-V"),
+                  require=_opts("-t", "-T", "-v", "-V")),
+    "git": _GIT,
 }
 
 # Всё, что вообще может быть признано читающим. Скоуп скила — подмножество отсюда.

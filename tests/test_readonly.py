@@ -289,6 +289,15 @@ MUTATING = [
     ["ip", "addr", "show", "--", "flush"], ["systemctl", "--", "stop", "x"],
     ["docker", "--", "rm", "x"], ["docker", "ps", "restart"], ["apt", "list", "--", "install"],
     ["iptables", "-L", "--", "-F"],
+    # nginx: запуск мастера, сигналы, подмена конфига и директив
+    ["nginx"], ["nginx", "-s", "reload"], ["nginx", "-s", "stop"], ["nginx", "-t", "-g", "load_module /tmp/x.so;"],
+    ["nginx", "-t", "-c", "/tmp/evil.conf"], ["nginx", "-t", "-p", "/tmp"], ["nginx", "-q"],
+    # git: изменения, конфиг из argv, запись в файл, внешние дифф-программы, remote с токеном
+    ["git", "pull"], ["git", "fetch"], ["git", "checkout", "main"], ["git", "reset", "--hard"],
+    ["git", "-C", "/opt/x", "clean", "-fd"], ["git", "-c", "core.pager=sh", "log"],
+    ["git", "branch", "new"], ["git", "branch", "-D", "main"], ["git", "remote", "-v"],
+    ["git", "log", "--output=/tmp/x"], ["git", "diff", "--ext-diff", "--stat"],
+    ["git", "config", "--list"], ["git", "status", "--porcelain=v2", "x"],
 ]
 
 # Формы из плейбуков host/observe/security/tls/ssh и их тестов.
@@ -331,6 +340,15 @@ PLAYBOOK_FORMS = [
     ["tail", "-n", "50", "/var/log/caddy/x.log"], ["grep", ".env", "/var/log/caddy/access.log"],
     ["openssl", "x509", "-in", "fullchain.pem", "-noout", "-dates"], ["ps", "-eo", "pid,args"],
     ["cat", "/root/.ssh.bak/notes"], ["ls", "-la", "/root/.ssh"], ["cat", "id_ed25519.pub"],
+    ["nginx", "-t"], ["nginx", "-T"], ["nginx", "-tq"], ["nginx", "-v"], ["nginx", "-V"],
+    ["git", "-C", "/opt/x", "status", "-sb"], ["git", "status", "--porcelain"],
+    ["git", "-C", "/opt/x", "log", "--oneline", "-n", "10"], ["git", "log", "-n5", "--stat"],
+    ["git", "log", "--oneline", "HEAD..origin/main"], ["git", "log", "--format=%h %s", "--since=1.week"],
+    ["git", "-C", "/opt/x", "diff", "--stat"], ["git", "diff", "--name-only", "HEAD~1"],
+    ["git", "show", "--stat", "HEAD"], ["git", "show", "-s", "--format=%H", "abc123"],
+    ["git", "branch", "-a", "-v"], ["git", "branch", "--show-current"],
+    ["git", "rev-parse", "--abbrev-ref", "HEAD"], ["git", "rev-parse", "--show-toplevel"],
+    ["git", "--no-pager", "log", "--oneline"],
 ]
 
 
@@ -401,6 +419,10 @@ READS_REMOVED = [
     ["ps", "auxe"], ["ps", "e"], ["ps", "axeww"],
     ["systemctl", "show", "x", "-p", "Environment"], ["systemctl", "show", "x", "--property=Environment"],
     ["systemctl", "show", "x", "-p", "ExecStart,Environment"], ["systemctl", "show", "x"],
+    # содержимое файлов из git: диффы и `rev:path` — только с подтверждением
+    ["git", "show", "HEAD:.env"], ["git", "show", "--stat", "HEAD:.env"], ["git", "show", "HEAD"],
+    ["git", "diff"], ["git", "diff", "HEAD~1"], ["git", "log", "-p"], ["git", "log", "--stat", ".env"],
+    ["git", "diff", "--stat", "config/.env"],
 ]
 
 
