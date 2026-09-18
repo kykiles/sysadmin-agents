@@ -8,7 +8,7 @@ import yaml
 
 from app.logging import get_logger
 from app.skills import mcp_bridge
-from app.skills.readonly import HostAccess
+from app.skills.readonly import KNOWN_BINARIES, HostAccess
 from app.tools.base import Safety, Tool
 
 log = get_logger("skills")
@@ -77,13 +77,36 @@ def validate(meta: dict, dir_name: str) -> str | None:
     return None
 
 
+def trusted_code(root: Path) -> frozenset[str]:
+    """Навыки, чей tools.py разрешено исполнять: по имени на строку в `root/TRUSTED`.
+
+    tools.py исполняется при импорте — до всяких пометок SAFE/DANGEROUS, поэтому
+    чужой навык с кодом получил бы полное доверие, просто оказавшись в каталоге.
+    Список ведёт владелец, а не автор навыка: поле в metadata автор выставил бы себе сам.
+    """
+    f = root / "TRUSTED"
+    if not f.exists():
+        return frozenset()
+    lines = (line.split("#", 1)[0].strip() for line in f.read_text(encoding="utf-8").splitlines())
+    return frozenset(line for line in lines if line)
+
+
+def _declared_access(name: str, ext: dict) -> HostAccess:
+    """Доступ к хосту из frontmatter: навыку без кода не нужен tools.py ради ACCESS.
+    Что из объявленного читает без подтверждения, по-прежнему решает readonly.py."""
+    binaries = frozenset(ext.get("host-binaries", "").split())
+    if unknown := binaries - KNOWN_BINARIES:
+        log.warning("skill_unknown_binaries", skill=name, binaries=sorted(unknown))
+    return HostAccess(binaries=binaries, exec_allowed=ext.get("host-exec") == "true")
+
+
 def load_skill(skill_dir: Path) -> Skill:
     meta, body = parse_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
     if problem := validate(meta, skill_dir.name):
         raise ValueError(f"skill {skill_dir.name}: {problem}")
     ext = meta.get("metadata") or {}
     tools: list[Tool] = []
-    access = HostAccess()
+    access = _declared_access(skill_dir.name, ext)
     access_tools = None
     # Инструменты MCP-сервера приходят снаружи, и уровень риска у них взять неоткуда:
     # сервер отдаёт только имя, описание и схему. Решает человек, подключивший сервер,
@@ -99,12 +122,17 @@ def load_skill(skill_dir: Path) -> Skill:
     # других скиллов (например «как писать пост» поверх shell'а). А если есть —
     # он даёт свои инструменты, доступ к хосту (ACCESS) или и то, и другое.
     has_code = (skill_dir / "tools.py").exists()
+    if has_code and skill_dir.name not in trusted_code(skill_dir.parent):
+        # Навык остаётся плейбуком со скриптами (они с подтверждением), код ждёт
+        # владельца. write_skill его всё равно не тронет — он смотрит на файл.
+        log.warning("skill_code_untrusted", skill=skill_dir.name)
+        has_code = False
     if has_code:
         # Скилы лежат вне пакета ядра (корневой skills/) — домен не должен быть частью
         # app/. Имя пакета берём из каталога, который нам дали: так загрузчик не знает
         # заранее, где живёт библиотека.
         mod = importlib.import_module(f"{skill_dir.parent.name}.{skill_dir.name}.tools")
-        access = getattr(mod, "ACCESS", access)
+        access = access | getattr(mod, "ACCESS", HostAccess())
         access_tools = getattr(mod, "build_access_tools", None)
         if hasattr(mod, "build_tools"):
             tools = mod.build_tools()

@@ -130,3 +130,46 @@ async def test_subscription_is_untrusted_and_refused_next_to_host():
     spawn = next(t for t in d.tools if t.name == "spawn")
     out = await spawn.fn(role="r", skills=["subscription", "host"], task="t")
     assert "недоверенный" in out["error"]
+
+
+def test_untrusted_tools_py_is_not_executed(tmp_path):
+    """Чужой навык с кодом: tools.py не импортируется, остальное работает."""
+    d = _standard_skill(tmp_path)
+    marker = tmp_path / "executed"
+    (d / "tools.py").write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+    skill = load_skill(d)
+    assert not marker.exists()
+    assert skill.tools == [] and not skill.has_code
+    assert "scripts/count.py" in resource_files(skill)
+    assert [t.name for t in build_resource_tools([skill])] == ["read_skill_file", "run_skill_script"]
+
+
+def test_every_library_skill_with_code_is_trusted():
+    from app.skills.loader import trusted_code
+
+    with_code = {d.name for d in SKILLS_DIR.iterdir() if (d / "tools.py").exists()}
+    assert with_code <= trusted_code(SKILLS_DIR)
+    assert all(s.has_code for s in load_all_skills(SKILLS_DIR).values() if s.name in with_code)
+
+
+def test_trusted_list_skips_comments_and_blanks(tmp_path):
+    from app.skills.loader import trusted_code
+
+    assert trusted_code(tmp_path) == frozenset()
+    (tmp_path / "TRUSTED").write_text("# свои\nhost  # хост\n\ndb\n", encoding="utf-8")
+    assert trusted_code(tmp_path) == {"host", "db"}
+
+
+async def test_host_access_declared_in_frontmatter_without_code(tmp_path):
+    from app.skills.readonly import build_host_tools
+
+    skill = load_skill(_standard_skill(tmp_path, frontmatter=(
+        'metadata:\n  host-binaries: "df uptime"\n  host-exec: "true"\n')))
+    assert not skill.has_code
+    assert skill.access.binaries == {"df", "uptime"} and skill.access.exec_allowed
+    tools = {t.name: t for t in build_host_tools(skill.access)}
+    assert tools["host_query"].safety is Safety.SAFE
+    assert tools["shell_exec"].safety is Safety.DANGEROUS
+    refused = json.loads(await tools["host_query"].execute({"command": ["rm", "-rf", "/"]}))
+    assert "error" in refused
+

@@ -1,0 +1,13 @@
+# Навыки, чей tools.py загрузчик исполняет (см. app/skills/loader.py: trusted_code).
+# Код навыка работает с правами контейнера — вписывать сюда только проверенное.
+# Навык с tools.py не из списка грузится без кода: инструкции + scripts/ с подтверждением.
+db
+deploy
+docker
+host
+observe
+remnawave
+security
+ssh
+subscription
+tls
