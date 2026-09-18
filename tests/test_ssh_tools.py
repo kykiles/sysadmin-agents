@@ -98,3 +98,34 @@ def test_tool_safety():
     tools = {t.name: t.safety for t in build_access_tools(HostAccess())}
     assert tools["ssh_query"] is Safety.SAFE
     assert tools["ssh_exec"] is Safety.DANGEROUS
+
+
+@pytest.mark.parametrize("host", [
+    "-oProxyCommand=touch /tmp/PWNED @x",  # репро из аудита Б1
+    "-oProxyCommand=id",
+    "root@-oX",
+    "-x@node1",
+    "a b",
+    "",
+])
+@pytest.mark.parametrize("index", [0, 1])  # ssh_query и ssh_exec
+async def test_host_option_injection_refused_before_transport(host, index):
+    tool = build_access_tools(HostAccess())[index]
+    with mock.patch("skills.ssh.tools.shell_exec", new=mock.AsyncMock(return_value={})) as ssh:
+        out = await tool.execute({"host": host, "command": ["uptime"]})
+    assert "error" in out
+    ssh.assert_not_called()
+
+
+@pytest.mark.parametrize("host", ["user@1.2.3.4", "node.example", "10.0.0.1", "admin@node-1"])
+async def test_valid_hosts_pass(host):
+    tool = build_access_tools(HostAccess())[0]
+    with mock.patch("skills.ssh.tools.shell_exec", new=mock.AsyncMock(return_value={})) as ssh:
+        out = await tool.execute({"host": host, "command": ["uptime"]})
+    assert "error" not in out
+    ssh.assert_awaited_once()
+
+
+def test_argv_ends_options_before_target():
+    argv = _ssh_argv("10.0.0.1", ["uptime"])
+    assert argv[-3:-1] == ["--", "root@10.0.0.1"]

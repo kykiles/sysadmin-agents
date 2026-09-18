@@ -22,8 +22,14 @@ def _node_binaries(access: HostAccess) -> frozenset[str]:
     return _HOST_ACCESS.binaries | access.binaries | {"docker"}
 
 
+# Ни user, ни host не начинаются с `-`: иначе ssh прочтёт значение как свою опцию
+# (`-oProxyCommand=…` — исполнение в контейнере без подтверждения, аудит Б1).
+# Проверка в модели — отказ ещё до подтверждения и до транспорта.
+_HOST_RE = r"^(?:[A-Za-z0-9_][A-Za-z0-9._-]*@)?[A-Za-z0-9][A-Za-z0-9.-]*$"
+
+
 class SshParams(BaseModel):
-    host: str = Field(description="node IP or hostname (may be user@host)")
+    host: str = Field(description="node IP or hostname (may be user@host)", pattern=_HOST_RE)
     command: list[str] = Field(description="command argv to run on the node")
 
 
@@ -39,6 +45,7 @@ def _ssh_argv(host: str, command: list[str]) -> list[str]:
         "-o", "ControlMaster=auto",
         "-o", "ControlPath=/tmp/ssh-%r@%h:%p",
         "-o", "ControlPersist=60s",
+        "--",  # второй слой к _HOST_RE: цель не станет опцией ни при каком значении
         target,
         " ".join(shlex.quote(a) for a in command),
     ]
