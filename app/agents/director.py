@@ -566,7 +566,7 @@ class Director(Agent):
     def _provenance(self) -> dict:
         """Происхождение записей памяти в текущей задаче: задача журнала, а в
         `source` — недоверенные навыки, если они работали (пусто — не работали).
-        Флаг на весь run консервативен; точнее — T09."""
+        Флаг на весь run консервативен."""
         source = ("spawn:" + ",".join(sorted(self._untrusted_skills))
                   if self._untrusted_skills else "")
         return {"run_id": self._run_id, "source": source}
