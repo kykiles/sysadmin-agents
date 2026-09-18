@@ -381,3 +381,55 @@ async def test_report_file_removed_after_send(tmp_path):
     await handler(msg)
     assert msg.answer_document.await_count == 1
     assert not report.exists()
+
+
+# ---------- сводка /learn: решённая кнопка уходит из сообщения ----------
+
+def _review_cb(data, rows):
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    cb = _cb(data)
+    cb.message.html_text = "Сводка"
+    cb.message.reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=text, callback_data=cd) for text, cd in row] for row in rows
+    ])
+    return cb
+
+
+async def _press_cb(router, cb):
+    await router.propagate_event(update_type="callback_query", event=cb)
+    return cb
+
+
+def _left(cb):
+    markup = cb.message.edit_text.call_args.kwargs["reply_markup"]
+    return None if markup is None else [b.callback_data for row in markup.inline_keyboard for b in row]
+
+
+async def test_pressed_review_button_leaves_the_message():
+    """Нажатая «Записать» пропадает, остальные остаются, итог дописан в текст."""
+    learning = _learning()
+    cb = _review_cb("sf:s1:add", [[("Записать: infra/k", "sf:s1:add")],
+                                  [("Забыть: infra/old", "lf:s2:del")]])
+    await _press_cb(_router(learning=learning), cb)
+    assert _left(cb) == ["lf:s2:del"]
+    text = cb.message.edit_text.call_args.args[0]
+    assert text.startswith("Сводка") and "Записано: infra/k" in text
+
+
+async def test_last_review_button_removes_keyboard(tmp_path):
+    learning, pid = _quarantine(tmp_path)
+    cb = _review_cb(f"qf:{pid}:no", [[("Принять: net/asn", f"qf:{pid}:ok"),
+                                      ("Отклонить", f"qf:{pid}:no")]])
+    await _press_cb(_router(learning=learning), cb)
+    assert _left(cb) is None
+    assert "Отклонено: net/asn" in cb.message.edit_text.call_args.args[0]
+
+
+async def test_stale_review_button_is_removed_too():
+    """Устаревшая кнопка ничего не пишет в память, но и висеть ей незачем."""
+    learning = _learning()
+    learning.pending = {}
+    cb = _review_cb("sf:s1:add", [[("Записать: infra/k", "sf:s1:add")]])
+    await _press_cb(_router(learning=learning), cb)
+    learning.facts.remember.assert_not_called()
+    assert _left(cb) is None

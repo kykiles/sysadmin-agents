@@ -1,9 +1,10 @@
 import asyncio
+import html
 from pathlib import Path
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import CallbackQuery, FSInputFile, InaccessibleMessage, InlineKeyboardMarkup, Message
 from app.agents.messages import Decision, Task, Result
 from app.bot.filters import OwnerCallbackFilter, WhitelistFilter
 from app.config import settings
@@ -13,6 +14,32 @@ from app.learning.review import render_review, resolve_fact, run_review
 from app.logging import get_logger
 
 log = get_logger("handlers")
+
+
+async def settle_review_button(callback: CallbackQuery, result: str) -> None:
+    """Убрать решённую кнопку из сводки /learn и дописать итог в текст.
+
+    Повторное нажатие и так ничего не пишет в память — но живая кнопка обещает
+    обратное, а сводка не показывает, что уже решено. Ряд уходит целиком: у
+    карантина в нём пара «Принять/Отклонить». Итог пишем и для устаревшей кнопки —
+    она мертва, висеть ей незачем.
+    """
+    msg = callback.message
+    if msg is None or isinstance(msg, InaccessibleMessage):
+        return
+    rows = msg.reply_markup.inline_keyboard if msg.reply_markup else []
+    pressed = next((row for row in rows if any(b.callback_data == callback.data for b in row)), None)
+    left = [row for row in rows if row is not pressed]
+    # Предмет — из первой кнопки ряда: «Записать: infra/k» → «infra/k».
+    subject = pressed[0].text.split(": ", 1)[-1] if pressed else ""
+    note = f"{result}: {subject}" if subject else result
+    try:
+        await msg.edit_text(
+            msg.html_text + f"\n• {html.escape(note)}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=left) if left else None,
+        )
+    except Exception:
+        log.warning("review_edit_failed", data=callback.data)
 
 
 def with_quote(message: Message) -> str:
@@ -126,7 +153,9 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
                                     fact.get("kind", "stable"),
                                     description=fact.get("description", ""),
                                     origin="consolidation")
-        await callback.answer("Записано" if fact else "Предложение устарело")
+        result = "Записано" if fact else "Предложение устарело"
+        await callback.answer(result)
+        await settle_review_button(callback, result)
 
     @router.callback_query(F.data.startswith("lf:"))
     async def _forget_fact(callback: CallbackQuery):
@@ -134,7 +163,9 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         found = resolve_fact(learning.facts, sid) if learning else None
         if found is not None:
             learning.facts.forget(*found)
-        await callback.answer("Факт забыт" if found else "Факт не найден")
+        result = "Факт забыт" if found else "Факт не найден"
+        await callback.answer(result)
+        await settle_review_button(callback, result)
 
     @router.callback_query(F.data.startswith("qf:"))
     async def _resolve_proposal(callback: CallbackQuery):
@@ -149,7 +180,9 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         else:
             done = learning.facts.reject(pid)
             label = "Отклонено"
-        await callback.answer(label if done else "Предложение устарело или уже решено")
+        result = label if done else "Предложение устарело или уже решено"
+        await callback.answer(result)
+        await settle_review_button(callback, result)
 
     @router.message()
     async def _task(message: Message):
