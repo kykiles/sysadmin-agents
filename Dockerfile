@@ -10,8 +10,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
+# Только версии из лока с проверкой хешей: образ пересобирается на каждом
+# деплое, и незафиксированная зависимость приезжала бы в root-контейнер без ревью.
+COPY requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY app ./app
 COPY agent_memory ./agent_memory
