@@ -433,3 +433,32 @@ async def test_stale_review_button_is_removed_too():
     await _press_cb(_router(learning=learning), cb)
     learning.facts.remember.assert_not_called()
     assert _left(cb) is None
+
+
+# ---------- ответ Директора: Rich Message, при ошибке — HTML ----------
+
+def _task_handler(content):
+    from app.bot.handlers import build_router
+    director = MagicMock()
+    director.handle = AsyncMock(return_value=Result(task_id="t", content=content))
+    router = build_router(director=director, allowed_id=1, memory=MagicMock())
+    return [h.callback for h in router.message.handlers if h.callback.__name__ == "_task"][0]
+
+
+async def test_answer_sent_as_rich_markdown():
+    """Разметка модели уходит как есть: таблицы и списки рисует Telegram."""
+    text = "| a | b |\n|---|---|\n| 1 | 2 |"
+    msg = _msg()
+    msg.bot.send_rich_message = AsyncMock()
+    await _task_handler(text)(msg)
+    kwargs = msg.bot.send_rich_message.call_args.kwargs
+    assert kwargs["chat_id"] == 1
+    assert kwargs["rich_message"].markdown == text
+    msg.answer.assert_not_awaited()
+
+
+async def test_answer_falls_back_to_html_when_rich_fails():
+    msg = _msg()
+    msg.bot.send_rich_message = AsyncMock(side_effect=RuntimeError("bad request"))
+    await _task_handler("**итог**")(msg)
+    msg.answer.assert_awaited_once_with("<b>итог</b>")

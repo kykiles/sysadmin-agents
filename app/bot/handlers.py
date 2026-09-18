@@ -4,7 +4,8 @@ from pathlib import Path
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, FSInputFile, InaccessibleMessage, InlineKeyboardMarkup, Message
+from aiogram.types import (CallbackQuery, FSInputFile, InaccessibleMessage, InlineKeyboardMarkup,
+                           InputRichMessage, Message)
 from app.agents.messages import Decision, Task, Result
 from app.bot.filters import OwnerCallbackFilter, WhitelistFilter
 from app.config import settings
@@ -191,6 +192,14 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
                 # отчёт нужен только для отправки — на сервере не копим
                 Path(result.attachment).unlink(missing_ok=True)
             return
+        # Разметку модели Telegram рисует сам (таблицы, списки, код) — Bot API 10.1.
+        # Отказ (невалидная разметка, длина) — прежний HTML, ответ не теряется.
+        try:
+            await message.bot.send_rich_message(
+                chat_id=message.chat.id, rich_message=InputRichMessage(markdown=result.content))
+            return
+        except Exception:
+            log.warning("rich_answer_failed", task_id=task.id)
         for part in split_message(result.content):
             await message.answer(render_answer(part))
 
