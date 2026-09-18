@@ -19,6 +19,7 @@ tls, security и ssh, — и копии разошлись: список read-on
 При спавне доступы выданных скилов объединяются в один инструмент `host_query`,
 поэтому имя у него одно и коллизии имён с разным скоупом невозможны.
 """
+import posixpath
 import re
 from dataclasses import dataclass, field
 from typing import Callable
@@ -68,6 +69,10 @@ class Argv:
     single_dash: bool = False
     # аргументы не опции, а данные: echo печатает, test сравнивает
     raw: bool = False
+    # позиционные — файлы, содержимое которых уходит в вывод (cat, grep)
+    reads: bool = False
+    # опции, которые задают шаблон grep; без них шаблон — первый позиционный
+    pattern_opts: frozenset[str] = frozenset()
 
 
 def _re(pattern: str) -> Check:
@@ -105,7 +110,25 @@ def _opts(*names: str) -> frozenset[str]:
     return frozenset(names)
 
 
-def _valid(spec: Argv, args: list[str], seen: set[str] | None = None) -> bool:
+# Секреты: прочитанное SAFE-инструментом уходит в LLM, в транскрипт /trace и в
+# историю диалога, а redact узнаёт лишь знакомые формы (аудит Б2). Проверка по
+# имени: симлинк с другим именем её обойдёт — это страховка от случайного чтения
+# и от внедрённой инструкции «покажи .env», а не песочница.
+_SECRET_NAME = re.compile(
+    r"\.env|\.env\..*|.*\.key|privkey.*\.pem|id_(?!.*\.pub$).*|\.pgpass|\.netrc|\.git-credentials"
+    r"|g?shadow-?|environ"  # /etc/shadow и бэкап shadow-, /proc/<pid>/environ
+)
+
+
+def _secret(path: str) -> bool:
+    parts = posixpath.normpath(path).split("/")
+    return ".ssh" in parts or bool(_SECRET_NAME.fullmatch(parts[-1]))
+
+
+def _valid(spec: Argv, args: list[str], seen: set[str] | None = None,
+           files: list[str] | None = None) -> bool:
+    """`files` собирает позиционные читающих утилит — пути, чьё содержимое
+    окажется в выводе (шаблон grep сюда не попадает)."""
     if spec.raw:
         return True
     seen = set() if seen is None else seen
@@ -121,12 +144,14 @@ def _valid(spec: Argv, args: list[str], seen: set[str] | None = None) -> bool:
             continue
         if spec.subcommands is not None:
             sub = spec.subcommands.get(a)
-            return sub is not None and _valid(sub, args[i:], seen)
+            return sub is not None and _valid(sub, args[i:], seen, files)
         pos.append(a)
     if spec.subcommands is not None:
         return False
     if spec.require and not spec.require & seen:
         return False
+    if spec.reads and files is not None:
+        files.extend(pos if spec.pattern_opts & seen or not spec.pattern_opts else pos[1:])
     return spec.positional(pos)
 
 
@@ -173,28 +198,32 @@ def _option(spec: Argv, a: str, args: list[str], i: int, seen: set[str]) -> int 
 
 _GREP = Argv(
     flags=_opts(
-        "-i", "-v", "-c", "-l", "-L", "-n", "-h", "-H", "-o", "-q", "-s", "-r", "-R",
+        "-i", "-v", "-c", "-l", "-L", "-n", "-h", "-H", "-o", "-q", "-s",
         "-w", "-x", "-E", "-F", "-G", "-P", "-a", "-I", "-z", "-Z", "-b",
         "--ignore-case", "--invert-match", "--count", "--files-with-matches",
         "--files-without-match", "--line-number", "--no-filename", "--with-filename",
-        "--only-matching", "--quiet", "--silent", "--no-messages", "--recursive",
-        "--dereference-recursive", "--word-regexp", "--line-regexp", "--extended-regexp",
+        "--only-matching", "--quiet", "--silent", "--no-messages", "--word-regexp", "--line-regexp", "--extended-regexp",
         "--fixed-strings", "--perl-regexp", "--text", "--null", "--null-data",
     ),
     valued={
-        "-e": _any, "--regexp": _any, "-f": _word, "--file": _word,
+        "-e": _any, "--regexp": _any,
+        "-f": lambda v: _word(v) and not _secret(v), "--file": lambda v: _word(v) and not _secret(v),
         "-m": _INT, "--max-count": _INT,
         "-A": _INT, "-B": _INT, "-C": _INT,
         "--after-context": _INT, "--before-context": _INT, "--context": _INT,
         "--include": _any, "--exclude": _any, "--exclude-dir": _any,
     },
+    # без -r/-R: рекурсия по каталогу проходит и по .env, путь не проверить
     positional=_paths,
+    reads=True,
+    pattern_opts=_opts("-e", "--regexp", "-f", "--file"),
 )
 
 _HEAD_TAIL = Argv(
     flags=_opts("-q", "-v", "-z", "--quiet", "--silent", "--verbose", "--zero-terminated"),
     valued={"-n": _COUNT, "--lines": _COUNT, "-c": _COUNT, "--bytes": _COUNT},
     positional=_paths,
+    reads=True,
 )
 
 _IPTABLES = Argv(
@@ -207,21 +236,26 @@ _IPTABLES = Argv(
     require=_opts("-L", "--list", "-S", "--list-rules"),
 )
 
+# Environment= держит пароли сервисов; `show` без -p печатает все свойства, с ним и его.
+# `systemctl cat` тоже может показать Environment= из юнита — редкость, не закрываем.
+_PROPERTY = lambda v: _word(v) and "environment" not in v.lower()  # noqa: E731
 _SYSTEMCTL_OPTS = dict(
     flags=_opts("--no-pager", "-l", "--full", "-a", "--all", "--no-legend", "--plain",
                 "-q", "--quiet", "--failed", "--value", "--system"),
     valued={"-n": _INT, "--lines": _INT, "-t": _word, "--type": _word,
-            "--state": _word, "-p": _word, "--property": _word,
+            "--state": _word, "-p": _PROPERTY, "--property": _PROPERTY,
             "-o": _word, "--output": _word},
 )
+_UNITS = _each(_re(r"[A-Za-z0-9@._:\\*\[\]-]+"))
 _SYSTEMCTL = Argv(
     **_SYSTEMCTL_OPTS,
     subcommands={
-        sub: Argv(**_SYSTEMCTL_OPTS, positional=_each(_re(r"[A-Za-z0-9@._:\\*\[\]-]+")))
-        for sub in (
-            "status", "show", "cat", "is-active", "is-enabled", "is-failed",
-            "list-units", "list-unit-files", "list-timers", "list-sockets", "get-default",
-        )
+        **{sub: Argv(**_SYSTEMCTL_OPTS, positional=_UNITS)
+           for sub in (
+               "status", "cat", "is-active", "is-enabled", "is-failed",
+               "list-units", "list-unit-files", "list-timers", "list-sockets", "get-default",
+           )},
+        "show": Argv(**_SYSTEMCTL_OPTS, positional=_UNITS, require=_opts("-p", "--property")),
     },
 )
 
@@ -264,6 +298,8 @@ _APT = Argv(
 )
 
 _DOCKER_NAME = _re(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+# Без inspect: он отдаёт Config.Env с паролями. Локально есть docker_inspect,
+# который Env прячет; на ноде — ssh_exec с подтверждением.
 _DOCKER = Argv(subcommands={
     "ps": Argv(flags=_opts("-a", "--all", "-q", "--quiet", "-s", "--size", "--no-trunc",
                            "-l", "--latest"),
@@ -273,9 +309,6 @@ _DOCKER = Argv(subcommands={
                  valued={"-n": _re(r"\d+|all"), "--tail": _re(r"\d+|all"),
                          "--since": _word, "--until": _word},
                  positional=lambda ps: len(ps) == 1 and _DOCKER_NAME(ps[0])),
-    "inspect": Argv(flags=_opts("-s", "--size"),
-                    valued={"-f": _any, "--format": _any, "--type": _word},
-                    positional=lambda ps: bool(ps) and all(_DOCKER_NAME(p) for p in ps)),
     "stats": Argv(flags=_opts("--no-stream", "--no-trunc", "-a", "--all"),
                   valued={"--format": _any}, positional=_each(_DOCKER_NAME)),
     "images": Argv(flags=_opts("-a", "--all", "-q", "--quiet", "--digests", "--no-trunc"),
@@ -396,7 +429,8 @@ _SPECS: dict[str, Argv] = {
                        "--pid": _word, "-u": _word, "--user": _word, "-U": _word,
                        "-C": _word, "-g": _word, "-G": _word, "-t": _word, "-q": _word,
                        "--sort": _any},
-               positional=_each(_re(r"[A-Za-z]+"))),  # BSD-опции: aux
+               # BSD-опции (aux) без `e`: она печатает окружение процессов
+               positional=_each(_re(r"[A-DF-Za-df-z]+"))),
     "top": Argv(flags=_opts("-b", "-c", "-H", "-i", "-S", "-1"),
                 valued={"-n": _INT, "-d": _re(r"\d+(\.\d+)?"), "-o": _word, "-p": _word,
                         "-u": _word, "-U": _word, "-E": _re(r"[kmgtpe]"),
@@ -446,10 +480,10 @@ _SPECS: dict[str, Argv] = {
     "cat": Argv(flags=_opts("-A", "-b", "-e", "-E", "-n", "-s", "-t", "-T", "-u", "-v",
                             "--number", "--show-all", "--number-nonblank", "--squeeze-blank",
                             "--show-ends", "--show-tabs", "--show-nonprinting"),
-                positional=_paths),
+                positional=_paths, reads=True),
     "head": _HEAD_TAIL,
     "tail": _HEAD_TAIL,  # без -f/-F: слежение висит до таймаута
-    "zcat": Argv(flags=_opts("-f", "-q", "-v", "-l", "-t"), positional=_paths),
+    "zcat": Argv(flags=_opts("-f", "-q", "-v", "-l", "-t"), positional=_paths, reads=True),
     "grep": _GREP,
     "egrep": _GREP,
     "wc": Argv(flags=_opts("-l", "-w", "-c", "-m", "-L", "--lines", "--words", "--bytes",
@@ -526,10 +560,20 @@ def is_read_only(command: list[str], binaries: frozenset[str]) -> bool:
     if binary not in binaries:
         return False
     spec = _SPECS.get(binary)
-    return spec is not None and _valid(spec, args)
+    files: list[str] = []
+    return spec is not None and _valid(spec, args, files=files) and not any(map(_secret, files))
+
+
+def reads_secret(command: list[str]) -> bool:
+    spec = _SPECS.get(command[0]) if command else None
+    files: list[str] = []
+    return spec is not None and _valid(spec, command[1:], files=files) and any(map(_secret, files))
 
 
 def refusal(command: list[str], binaries: frozenset[str], exec_tool: str = "shell_exec") -> dict:
+    if reads_secret(command):
+        return {"command": command,
+                "error": f"секретный файл — только через {exec_tool} с подтверждением"}
     return {
         "command": command,
         "error": "команда не входит в список read-only для этого агента "

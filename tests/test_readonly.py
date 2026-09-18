@@ -8,7 +8,7 @@ import pytest
 from skills.host.tools import ACCESS as HOST
 from skills.observe.tools import ACCESS as OBSERVE
 from app.skills.readonly import (
-    HostAccess, KNOWN_BINARIES, build_host_tools, is_read_only,
+    HostAccess, KNOWN_BINARIES, build_host_tools, is_read_only, refusal,
 )
 from skills.security.tools import ACCESS as SECURITY
 from skills.tls.tools import ACCESS as TLS
@@ -326,7 +326,11 @@ PLAYBOOK_FORMS = [
     ["lsof", "-i", ":443"], ["lsof", "-nP", "-i", ":443"], ["echo", "hi"],
     ["docker", "ps", "-a"], ["docker", "logs", "--tail", "200", "remnanode"],
     ["docker", "logs", "--tail=200", "remnanode"], ["docker", "compose", "ps"],
-    ["docker", "stats", "--no-stream", "remnanode"], ["docker", "inspect", "remnanode"],
+    ["docker", "stats", "--no-stream", "remnanode"],
+    ["systemctl", "show", "docker", "-p", "ActiveState,SubState"],
+    ["tail", "-n", "50", "/var/log/caddy/x.log"], ["grep", ".env", "/var/log/caddy/access.log"],
+    ["openssl", "x509", "-in", "fullchain.pem", "-noout", "-dates"], ["ps", "-eo", "pid,args"],
+    ["cat", "/root/.ssh.bak/notes"], ["ls", "-la", "/root/.ssh"], ["cat", "id_ed25519.pub"],
 ]
 
 
@@ -372,3 +376,43 @@ def test_every_skill_binary_has_a_contract():
     from skills.docker.tools import ACCESS as DOCKER
     for access in (HOST, OBSERVE, SECURITY, TLS, DOCKER):
         assert access.binaries <= KNOWN_BINARIES
+
+
+# ---------- секреты не читаются без подтверждения (аудит Б2) ----------
+
+SECRET_READS = [
+    ["cat", "/opt/sysadmin-agents/.env"], ["cat", ".env.prod"], ["head", "-n", "5", "/opt/x/.env"],
+    ["tail", "/root/.ssh/authorized_keys"], ["cat", "/root/.ssh/id_ed25519"],
+    ["cat", "/opt/sysadmin-agents/audit/ssh/id_ed25519"], ["cat", "/etc/shadow"],
+    ["cat", "/etc/gshadow"], ["cat", "/etc/shadow-"], ["cat", "/etc/./shadow"],
+    ["cat", "/etc/../etc/shadow"], ["cat", "/proc/1/environ"], ["cat", "/proc/self/environ"],
+    ["cat", "/etc/letsencrypt/live/x/privkey.pem"], ["cat", "/etc/ssl/private/server.key"],
+    ["cat", "/root/.pgpass"], ["cat", "/root/.netrc"], ["cat", "/root/.git-credentials"],
+    ["zcat", "/backup/.env"], ["grep", "PASSWORD", "/opt/x/.env"],
+    ["grep", "-e", "x", "/etc/shadow"], ["grep", "x", "/var/log/syslog", "/etc/shadow"],
+    ["egrep", "KEY", ".env"],
+]
+
+READS_REMOVED = [
+    ["grep", "-f", "/etc/shadow", "/var/log/syslog"],  # шаблоны из секрета: отказ на опции
+    ["grep", "-r", "PASSWORD", "/opt"], ["grep", "-R", "x", "/etc"], ["grep", "-ri", "x", "/opt"],
+    ["grep", "--recursive", "x", "/opt"], ["grep", "--dereference-recursive", "x", "/opt"],
+    ["docker", "inspect", "remnanode"], ["docker", "inspect", "-f", "{{.Config.Env}}", "x"],
+    ["ps", "auxe"], ["ps", "e"], ["ps", "axeww"],
+    ["systemctl", "show", "x", "-p", "Environment"], ["systemctl", "show", "x", "--property=Environment"],
+    ["systemctl", "show", "x", "-p", "ExecStart,Environment"], ["systemctl", "show", "x"],
+]
+
+
+@pytest.mark.parametrize("command", SECRET_READS + READS_REMOVED)
+def test_secret_channels_refused(command):
+    assert not ro(*command)
+
+
+@pytest.mark.parametrize("command", SECRET_READS)
+def test_secret_refusal_points_to_confirmation(command):
+    assert "секретный файл" in refusal(command, ALL)["error"]
+
+
+def test_ordinary_refusal_unchanged():
+    assert "секретный файл" not in refusal(["rm", "-rf", "/"], ALL)["error"]

@@ -15,6 +15,10 @@ _ASSIGN = re.compile(
     r"(?i)\b(\w*(?:password|passwd|secret|token|api_?key)\w*\s*=\s*)([^\s\"'\\,}]+)"
 )
 _URL_CRED = re.compile(r"(://[^\s:/@\"']+:)([^\s@\"'\\]+)(?=@)")
+# Приватный ключ целиком: страховка для того, что прочитано с подтверждением.
+# Незакрытый блок (вывод обрезан) — до конца текста.
+_PEM = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+                  re.DOTALL)
 
 # Регулярки выше узнают только знакомые формы (JWT, Bearer, password=). Ключ из
 # настроек узнаём по значению — в какой бы форме его ни повторила внешняя команда.
@@ -39,6 +43,7 @@ def _known_secrets() -> list[str]:
 def redact(text: str) -> str:
     for secret in _known_secrets():
         text = text.replace(secret, "<redacted>")
+    text = _PEM.sub("<redacted>", text)
     text = _SECRET.sub("<redacted>", text)
     text = _ASSIGN.sub(r"\1<redacted>", text)
     return _URL_CRED.sub(r"\1<redacted>", text)

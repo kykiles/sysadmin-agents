@@ -10,7 +10,7 @@ description: 'Работа на удалённой ноде по SSH: диагн
 ошибку: искать его — дело Директора.
 
 Инструменты (SSH здесь только транспорт, вся логика — твоя):
-- `ssh_query` — **только чтение** на ноде (docker ps/logs/inspect/stats, systemctl status,
+- `ssh_query` — **только чтение** на ноде (docker ps/logs/stats, systemctl status,
   journalctl, df, free, uptime, ss, ip show). Выполняется сразу.
 - `ssh_exec` — **любые команды, включая изменяющие** (restart, compose up, apt upgrade).
   Опасен, система запросит подтверждение пользователя автоматически.

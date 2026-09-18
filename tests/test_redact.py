@@ -97,3 +97,21 @@ def test_setup_logging_scrubs_every_log_field(tmp_path, monkeypatch):
             h.close()
     event = app_logging.scrub_event(None, "info", {"event": "x", "url": "https://u:passw0rd123@h/"})
     assert "passw0rd123" not in event["url"]
+
+
+def test_pem_private_key_removed():
+    key = ("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU\n"
+           "-----END OPENSSH PRIVATE KEY-----")
+    out = redact(f"before\n{key}\nafter")
+    assert "b3BlbnNzaC1rZXktdjEAAAAABG5vbmU" not in out
+    assert out == "before\n<redacted>\nafter"
+
+
+def test_truncated_pem_removed_to_end():
+    out = redact("x -----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA7")
+    assert out == "x <redacted>"
+
+
+def test_certificate_untouched():
+    cert = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    assert redact(cert) == cert
