@@ -31,7 +31,10 @@ class NoParams(BaseModel):
 
 
 class ProjectParams(BaseModel):
-    project: str = Field(description="compose project dir name under COMPOSE_PROJECTS_DIR")
+    # Одно имя каталога: `sysadmin-agents/` обходил project_guard, `../x` выводил
+    # за COMPOSE_PROJECTS_DIR (аудит Б5). Без `/` путь не собрать.
+    project: str = Field(description="compose project dir name under COMPOSE_PROJECTS_DIR",
+                         pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 class ComposeUpParams(ProjectParams):

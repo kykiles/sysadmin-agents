@@ -1,6 +1,10 @@
 import asyncio
 import json
 from unittest.mock import AsyncMock, patch, MagicMock
+
+import pytest
+from pydantic import ValidationError
+
 from app.tools import docker as dk
 
 
@@ -188,3 +192,16 @@ async def test_container_guard_still_reports_missing():
 async def test_project_guard_refuses_own_project():
     assert "самой системы" in await dk.project_guard({"project": "sysadmin-agents"})
     assert await dk.project_guard({"project": "remnabot"}) is None
+
+
+@pytest.mark.parametrize("project", ["sysadmin-agents/", "../etc", "a/b", "/etc", "..", "", "-p"])
+def test_project_name_rejected(project):
+    with pytest.raises(ValidationError):
+        dk.ComposeUpParams(project=project)
+    with pytest.raises(ValidationError):
+        dk.ProjectParams(project=project)
+
+
+@pytest.mark.parametrize("project", ["remnabot", "web", "glowshine_app", "app.v2"])
+def test_project_name_accepted(project):
+    assert dk.ComposeUpParams(project=project).project == project
