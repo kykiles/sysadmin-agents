@@ -106,8 +106,8 @@ def test_yes_to_all_for_script_is_scoped_to_that_script():
 
 def test_scripts_of_a_skill_with_code_stay_behind_its_tools():
     remnawave = load_skill(SKILLS_DIR / "remnawave")
-    assert resource_files(remnawave) == []
-    assert build_resource_tools([remnawave]) == []
+    assert resource_files(remnawave) == ["references/api.md"]
+    assert [t.name for t in build_resource_tools([remnawave])] == ["read_skill_file"]
 
 
 async def test_untrusted_skill_with_scripts_is_not_granted(tmp_path):

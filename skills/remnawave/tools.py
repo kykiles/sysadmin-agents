@@ -12,7 +12,7 @@ from app.config import settings
 _SCRIPTS_DIR = Path(__file__).parent / "scripts"
 
 # Каталог скриптов. Агент видит только эти имена, а не весь OpenAPI.
-_READ_SCRIPTS = {"user-find", "user-get", "user-traffic", "user-devices", "nodes"}
+_READ_SCRIPTS = {"user-find", "user-get", "user-traffic", "user-devices", "user-history", "nodes"}
 _ACTION_SCRIPTS = {
     "user-extend", "user-enable", "user-disable",
     "user-revoke", "user-reset-traffic", "hwid-reset",
@@ -120,7 +120,7 @@ async def rw_curl_write(method: str, path: str, body: dict | None = None) -> dic
 
 def build_tools() -> list[Tool]:
     return [
-        Tool("rw_query", "Run a READ-ONLY remnawave panel script (user-find, user-get, user-traffic, user-devices, nodes). Safe, auto-executed.", ScriptParams, rw_query, Safety.SAFE),
+        Tool("rw_query", "Run a READ-ONLY remnawave panel script (user-find, user-get, user-traffic, user-devices, user-history, nodes). Safe, auto-executed.", ScriptParams, rw_query, Safety.SAFE),
         Tool("rw_action", "Run a remnawave MUTATION script (user-extend, user-enable, user-disable, user-revoke, user-reset-traffic, hwid-reset). DESTRUCTIVE, changes a paying customer's subscription. Requires user confirmation.", ScriptParams, rw_action, Safety.DANGEROUS),
         Tool("rw_curl_read", "Raw GET to the remnawave panel API by PATH (host is fixed from config). Safe, auto-executed. Use for endpoints not covered by the ready scripts.", CurlParams, rw_curl_read, Safety.SAFE),
         Tool("rw_curl_write", "Raw POST/PATCH/DELETE to the remnawave panel API by PATH. DESTRUCTIVE, changes panel state. Requires user confirmation.", CurlParams, rw_curl_write, Safety.DANGEROUS),
