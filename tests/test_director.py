@@ -101,5 +101,42 @@ async def test_write_skill_refuses_bloated_playbook(tmp_path):
     assert "error" in out
 
 
+async def test_rewrite_of_existing_skill_first_returns_its_current_playbook(tmp_path):
+    """Директор видит только description — перезапись вслепую стёрла бы старые шаги.
+    Проверка идёт до подтверждения: кнопку жмут один раз, на реальную запись."""
+    (tmp_path / "weekly-report").mkdir()
+    (tmp_path / "weekly-report" / "SKILL.md").write_text(
+        "---\nname: weekly-report\ndescription: d\n---\nграбли: не бери выходные")
+    _, tool = _write_skill_tool(tmp_path)
+
+    problem = await tool.precheck(tool.prepare(
+        {"name": "weekly-report", "description": "d", "instructions": "новое"}))
+
+    assert "грабли: не бери выходные" in problem and "overwrite" in problem
+    assert await tool.precheck(tool.prepare(
+        {"name": "weekly-report", "description": "d", "instructions": "новое",
+         "overwrite": True})) is None
+
+
+async def test_write_skill_precheck_passes_new_skills_and_stays_in_skills_dir(tmp_path):
+    (tmp_path / "SKILL.md").write_text("чужой файл вне навыка")
+    _, tool = _write_skill_tool(tmp_path / "skills")
+
+    for name in ("weekly-report", "../skills-x", ".."):
+        assert await tool.precheck(tool.prepare(
+            {"name": name, "description": "d", "instructions": "i"})) is None, name
+
+
+async def test_write_skill_precheck_refuses_skill_with_code_before_confirmation(tmp_path):
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "tools.py").write_text("ACCESS = None")
+    _, tool = _write_skill_tool(tmp_path)
+
+    problem = await tool.precheck(tool.prepare(
+        {"name": "db", "description": "d", "instructions": "i", "overwrite": True}))
+
+    assert "код" in problem
+
+
 def test_no_write_skill_tool_without_a_skills_dir():
     assert not [t for t in Director(llm=None).tools if t.name == "write_skill"]

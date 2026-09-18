@@ -155,7 +155,10 @@ _ACTIONS: dict[str, tuple] = {
     "rw_action": (_rw_action, False),
     "rw_curl_write": (lambda a: "Сейчас в панели Remnawave будет "
                                 f"{_HTTP_ACTIONS.get(str(a.get('method')).upper(), 'изменение')} данных.", True),
-    "write_skill": (lambda a: f"Сейчас будет сохранён новый навык «{a['name']}»: {a.get('description', '')}", False),
+    "write_skill": (lambda a: (f"Сейчас навык «{a['name']}» будет переписан: "
+                               if a.get("overwrite") else
+                               f"Сейчас будет сохранён новый навык «{a['name']}»: ")
+                              + a.get("description", ""), False),
     "docker_exec": (lambda a: f"Сейчас внутри Docker-контейнера «{a['container']}» будет выполнена команда.", True),
     "docker_query": (lambda a: f"Сейчас будет выполнен запрос к базе данных в контейнере «{a['container']}».", True),
     "shell_exec": (lambda a: "Сейчас на этом сервере будет выполнена команда.", True),

@@ -63,13 +63,20 @@ class WriteSkillParams(BaseModel):
     name: str = Field(description="kebab-case skill name, latin, e.g. weekly-report")
     description: str = Field(
         description="one line saying WHEN it applies and WHAT it does — this is the only "
-                    "thing you will see when choosing skills later, so name the triggers: "
-                    "'when asked for a weekly traffic report: collects ... and formats ...'"
+                    "thing you will see when choosing skills later, so name the triggers, "
+                    "including indirect ones: how the user would put it without naming the "
+                    "task. 'when asked for a weekly traffic report, or how much users "
+                    "downloaded, or whether traffic grew: collects ... and formats ...'"
     )
     instructions: str = Field(
         description="the playbook itself, in Russian markdown: steps in order, which skills "
                     "to grant the agent, what to check, known pitfalls. Explain why a step "
                     "matters instead of writing ВСЕГДА/НИКОГДА — reasons generalise, rules don't"
+    )
+    overwrite: bool = Field(
+        default=False,
+        description="true only to replace an existing skill after reading its current "
+                    "playbook: merge the old steps and pitfalls into the new text",
     )
 
 
@@ -437,7 +444,8 @@ class Director(Agent):
             self._agents_used.append(sub.name)
             return {"agent": sub.name, "result": result.content, "success": result.success}
 
-        async def _write_skill(name: str, description: str, instructions: str) -> dict:
+        async def _write_skill(name: str, description: str, instructions: str,
+                               overwrite: bool = False) -> dict:
             if not (3 <= len(name) <= 64 and _SKILL_NAME.fullmatch(name)):
                 return {"error": "имя навыка: латиница kebab-case (weekly-report), 3-64 символа"}
             if len(description) > 1024 or not description.strip():
@@ -464,6 +472,22 @@ class Director(Agent):
             self.reload_library(await asyncio.to_thread(load_all_skills, skills_dir))
             log.info("write_skill", skill=name)
             return {"saved": name, "note": "навык доступен для spawn сразу"}
+
+        async def _write_skill_precheck(args: dict) -> str | None:
+            """До подтверждения: Директор видит у навыка только description, и
+            перезапись вслепую молча стёрла бы старые шаги и грабли. Отдаём текущий
+            плейбук — сведёт старое с новым и позовёт снова с overwrite."""
+            if not _SKILL_NAME.fullmatch(args["name"]):
+                return None  # имя отклонит сам _write_skill — путь из него не строим
+            d = skills_dir / args["name"]
+            if (d / "tools.py").exists():
+                return f"навык {args['name']} содержит код — его плейбук правит человек"
+            md = d / "SKILL.md"
+            if args["overwrite"] or not md.exists():
+                return None
+            current = await asyncio.to_thread(md.read_text, encoding="utf-8")
+            return (f"навык {args['name']} уже есть. Его текущий текст ниже: сведи старые "
+                    f"шаги и грабли с новыми и вызови снова с overwrite=true.\n\n{current}")
 
         report_tool = Tool(
             name="make_report",
@@ -515,6 +539,7 @@ class Director(Agent):
                 params_model=WriteSkillParams,
                 fn=_write_skill,
                 safety=Safety.DANGEROUS,
+                precheck=_write_skill_precheck,
             ))
         if journal is not None:
             async def _recall_experience(query: str) -> dict:

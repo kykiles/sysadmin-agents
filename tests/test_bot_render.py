@@ -110,3 +110,12 @@ def test_unknown_tool_falls_back_to_name_and_model_reason():
 def test_malformed_args_do_not_break_phrase():
     plain = _plain_part(_text(_req("docker_restart")))
     assert "«docker_restart»" in plain
+
+
+def test_write_skill_confirmation_says_when_it_replaces_an_existing_skill():
+    new = _text(_req("write_skill", name="weekly-report", description="d", instructions="i"))
+    old = _text(_req("write_skill", name="weekly-report", description="d", instructions="i",
+                     overwrite=True))
+
+    assert "новый навык" in new and "переписан" not in new
+    assert "переписан" in old
