@@ -63,7 +63,7 @@ def with_quote(message: Message) -> str:
 
 
 def build_router(*, director, gateway=None, allowed_id: int, memory, learning=None,
-                 reload_library=None, journal=None) -> Router:
+                 journal=None) -> Router:
     router = Router()
     # Один фильтр на все сообщения и все кнопки (cf:, lf:, sf:): владелец в личном
     # чате. Раньше whitelist стоял только на сообщениях, callbacks проверяли
@@ -87,7 +87,6 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
             "> /reset — очистить историю диалога\n"
             "> /learn — самопроверка памяти: давно не подтверждавшиеся знания, факты из "
             "карантина и предложения запомнить новое — решаете кнопками\n"
-            "> /reload — перечитать навыки после загрузки новых\n"
             "> /trace [N] — ход N-й с конца задачи файлом (по умолчанию последней)\n\n"
             "Нужен отчёт файлом — попросите «оформи отчёт»."
         ))
@@ -96,18 +95,6 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
     async def _reset(message: Message):
         await asyncio.to_thread(memory.clear, str(message.chat.id))
         await message.answer("История диалога очищена.")
-
-    @router.message(Command("reload"))
-    async def _reload(message: Message):
-        if reload_library is None:
-            await message.answer("Перезагрузка библиотеки недоступна.")
-            return
-        try:
-            summary = await asyncio.to_thread(reload_library)
-        except Exception as e:
-            await message.answer(f"Не перезагрузил: {e}")
-            return
-        await message.answer(f"Библиотека перечитана — {summary}.")
 
     @router.message(Command("trace"))
     async def _trace(message: Message):

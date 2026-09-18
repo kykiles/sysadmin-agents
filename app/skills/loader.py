@@ -141,7 +141,7 @@ def resource_files(skill: Skill) -> list[str]:
 
 def load_all_skills(root: Path) -> dict[str, Skill]:
     """Невалидный скил пропускается с записью в лог: скачанный чужой скил не должен
-    ронять запуск бота и /reload."""
+    ронять запуск бота и write_skill."""
     skills: dict[str, Skill] = {}
     for d in sorted(root.iterdir()):
         if (d / "SKILL.md").exists():

@@ -119,7 +119,7 @@ def _remote_tool(url: str, server_id: str, spec, safety: Safety, skill_name: str
 def _run(coro):
     """Выполнить корутину синхронно, независимо от того, крутится ли уже loop.
 
-    Навыки читаются синхронно и на старте (внутри async main), и по /reload
+    Навыки читаются синхронно и на старте (внутри async main), и после write_skill
     (внутри потока), поэтому asyncio.run напрямую применить нельзя.
     """
     box: dict = {}

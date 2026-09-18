@@ -342,7 +342,7 @@ class Director(Agent):
                     await sub._run_safe(tc)
 
         async def _spawn(role: str, skills: list[str], task: str, steps: list[int] | None = None) -> dict:
-            # библиотеку читаем с инстанса — /reload подменяет её на ходу
+            # библиотеку читаем с инстанса — write_skill подменяет её на ходу
             unknown = [s for s in skills if s not in self._library]
             if unknown:
                 return {"error": f"неизвестные навыки: {unknown}", "available": list(self._library)}

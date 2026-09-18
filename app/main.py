@@ -60,18 +60,9 @@ async def main() -> None:
                         journal=journal, skills=skills, skills_dir=skills_dir,
                         progress=progress, facts=facts)
 
-    def reload_library() -> str:
-        """Перечитать skills/ без рестарта. Новые скиллы подхватываются сразу;
-        изменённый tools.py уже импортированного скилла — нет
-        (ponytail: importlib.reload, если понадобится править инструменты на живую)."""
-        new_skills = load_all_skills(skills_dir)
-        director.reload_library(new_skills)
-        return f"навыков: {len(new_skills)}"
-
     await set_bot_commands(bot)
     dp = create_dispatcher(director=director, gateway=gateway, memory=history,
-                           learning=learning, reload_library=reload_library,
-                           journal=journal)
+                           learning=learning, journal=journal)
 
     monitor_task: asyncio.Task | None = None
     if settings.monitor_enabled:
