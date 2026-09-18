@@ -6,18 +6,22 @@
 отказа в подтверждении. Код ставит то, что знает точно: пункт в работе, ждёт
 подтверждения, пользователь отказал. В конце задачи неотмеченный пункт — «пропущен».
 
-Вид без эмодзи: пункты пронумерованы, выполненный зачёркнут, остальные состояния —
-подписью курсивом после пункта.
+Вид без эмодзи: пункты пронумерованы, выполненный зачёркнут, пункт в работе жирный,
+состояния — подписью курсивом после пункта. Сообщение — Rich Message (Bot API 10.1);
+если Telegram его не принял, план этой задачи идёт прежним HTML.
 """
 import asyncio
 import html
 from dataclasses import dataclass, field
+
+from aiogram.types import InputRichMessage
 
 from app.logging import get_logger
 
 log = get_logger("progress")
 
 _NOTES = {"failed": "не выполнено", "skipped": "пропущен"}
+_ACTIVE = "в работе"
 
 
 @dataclass
@@ -28,15 +32,32 @@ class _Step:
     active: int = 0
     waiting: int = 0
 
+    def note(self) -> str | None:
+        """Подпись к пункту; None — пункт выполнен."""
+        if self.waiting:
+            return "ждёт вашего подтверждения"
+        if self.status == "done":
+            return None
+        return _NOTES.get(self.status) or (_ACTIVE if self.active else "")
+
     def render(self, number: int) -> str:
         line = f"{number}. {html.escape(self.text)}"
-        if self.waiting:
-            note = "ждёт вашего подтверждения"
-        elif self.status == "done":
+        note = self.note()
+        if note is None:
             return f"<s>{line}</s>"
-        else:
-            note = _NOTES.get(self.status) or ("в работе" if self.active else "")
         return f"{line} — <i>{note}</i>" if note else line
+
+    def rich(self, number: int) -> dict:
+        """Пункт нумерованного списка Rich Message; экранировать нечего — это не разметка."""
+        note = self.note()
+        if note is None:
+            text = {"type": "strikethrough", "text": self.text}
+        elif note:
+            main = {"type": "bold", "text": self.text} if note == _ACTIVE else self.text
+            text = [main, " — ", {"type": "italic", "text": note}]
+        else:
+            text = self.text
+        return {"blocks": [{"type": "paragraph", "text": text}], "value": number, "type": "1"}
 
 
 @dataclass
@@ -45,6 +66,8 @@ class _Board:
     steps: list[_Step]
     message_id: int | None = None
     shown: str = ""
+    # False — Telegram не принял Rich Message, план этой задачи идёт HTML
+    rich: bool = True
 
 
 @dataclass
@@ -180,7 +203,9 @@ class TelegramProgress:
 
     async def _show(self, board: _Board) -> None:
         async with self._lock:
-            # текст — под замком: иначе медленная правка затёрла бы более свежую
+            # текст — под замком: иначе медленная правка затёрла бы более свежую.
+            # HTML-вид — и запасной вариант, и отпечаток состояния: не изменился он —
+            # не изменился и Rich.
             text = f"<b>{html.escape(board.title)}</b>\n\n" + "\n".join(
                 s.render(n) for n, s in enumerate(board.steps, 1))
             if text == board.shown:
@@ -188,11 +213,30 @@ class TelegramProgress:
             # Список — подсказка, а не часть задачи: сбой Telegram её не роняет.
             try:
                 if board.message_id is None:
-                    msg = await self.bot.send_message(self.chat_id, text)
-                    board.message_id = msg.message_id
+                    board.message_id = (await self._send(board, text)).message_id
+                elif board.rich:
+                    await self.bot.edit_message_text(
+                        rich_message=self._rich(board), chat_id=self.chat_id,
+                        message_id=board.message_id, parse_mode=None)
                 else:
                     await self.bot.edit_message_text(text, chat_id=self.chat_id,
                                                      message_id=board.message_id)
                 board.shown = text
             except Exception:
                 log.warning("progress_not_shown", message_id=board.message_id)
+
+    async def _send(self, board: _Board, text: str):
+        if board.rich:
+            try:
+                return await self.bot.send_rich_message(self.chat_id, self._rich(board))
+            except Exception:
+                log.warning("progress_rich_refused")
+                board.rich = False
+        return await self.bot.send_message(self.chat_id, text)
+
+    @staticmethod
+    def _rich(board: _Board) -> InputRichMessage:
+        return InputRichMessage(blocks=[
+            {"type": "heading", "size": 3, "text": board.title},
+            {"type": "list", "items": [s.rich(n) for n, s in enumerate(board.steps, 1)]},
+        ])

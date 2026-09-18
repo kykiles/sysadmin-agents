@@ -6,7 +6,9 @@ CHAT = 123
 
 
 def _progress():
+    """План в HTML: Rich Message Telegram не принял. Rich-вид — в конце файла."""
     bot = MagicMock()
+    bot.send_rich_message = AsyncMock(side_effect=RuntimeError("rich refused"))
     bot.send_message = AsyncMock(return_value=MagicMock(message_id=7))
     bot.edit_message_text = AsyncMock()
     return TelegramProgress(bot, CHAT), bot
@@ -157,3 +159,68 @@ async def test_finish_returns_unfinished_steps_for_the_episode():
 async def test_finish_without_board_returns_nothing():
     p, _bot = _progress()
     assert await p.finish("r") == []
+
+
+# ---------- Rich Message: основной вид ----------
+
+def _rich_progress():
+    bot = MagicMock()
+    bot.send_rich_message = AsyncMock(return_value=MagicMock(message_id=7))
+    bot.send_message = AsyncMock()
+    bot.edit_message_text = AsyncMock()
+    return TelegramProgress(bot, CHAT), bot
+
+
+def _rich_last(bot):
+    if bot.edit_message_text.await_count:
+        msg = bot.edit_message_text.await_args.kwargs["rich_message"]
+    else:
+        msg = bot.send_rich_message.await_args.args[1]
+    return msg.model_dump(exclude_none=True)["blocks"]
+
+
+def _items(bot):
+    return [i["blocks"][0]["text"] for i in _rich_last(bot)[1]["items"]]
+
+
+async def test_rich_plan_sent_once_then_edited_in_place():
+    p, bot = _rich_progress()
+    await p.plan("r", "Пересборка <b>", ["Найти проект", "Пересобрать"])
+    heading, lst = _rich_last(bot)
+    assert heading["text"] == "Пересборка <b>" and heading["type"] == "heading"
+    assert [(i["value"], i["type"]) for i in lst["items"]] == [(1, "1"), (2, "1")]
+    assert _items(bot) == ["Найти проект", "Пересобрать"]
+
+    await p.started("r", [1, 2], "a#1")
+    await p.mark("a#1", 1, "done")
+    bot.send_message.assert_not_awaited()
+    assert bot.send_rich_message.await_count == 1
+    kwargs = bot.edit_message_text.await_args.kwargs
+    assert (kwargs["chat_id"], kwargs["message_id"], kwargs["parse_mode"]) == (CHAT, 7, None)
+    assert _items(bot) == [
+        {"type": "strikethrough", "text": "Найти проект"},
+        [{"type": "bold", "text": "Пересобрать"}, " — ", {"type": "italic", "text": "в работе"}],
+    ]
+
+
+async def test_rich_other_states_are_plain_text_with_note():
+    p, bot = _rich_progress()
+    await p.plan("r", "t", ["Пересобрать", "Проверить"])
+    await p.started("r", [1, 2], "a#1")
+    await p.waiting("a#1", True)
+    assert _items(bot)[0] == ["Пересобрать", " — ", {"type": "italic", "text": "ждёт вашего подтверждения"}]
+    await p.refused("a#1")
+    await p.waiting("a#1", False)
+    await p.finished("a#1")
+    await p.finish("r")
+    assert _items(bot) == [["Пересобрать", " — ", {"type": "italic", "text": "не выполнено"}],
+                           ["Проверить", " — ", {"type": "italic", "text": "пропущен"}]]
+
+
+async def test_refused_rich_falls_back_to_html_for_the_whole_plan():
+    p, bot = _progress()
+    await p.plan("r", "t", ["Один"])
+    await p.started("r", [1], "a#1")
+    assert bot.send_rich_message.await_count == 1
+    assert "rich_message" not in bot.edit_message_text.await_args.kwargs
+    assert _lines(bot) == "1. Один — <i>в работе</i>"
