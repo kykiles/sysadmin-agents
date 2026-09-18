@@ -27,12 +27,16 @@ class Usage:
     completion_tokens: int = 0
     cost: float = 0.0
     calls: int = 0
+    # Часть prompt_tokens, пришедшая из кэша провайдера: она в разы дешевле, и без
+    # неё по одним токенам не понять, сколько на деле стоит растущий контекст агента.
+    cached_tokens: int = 0
 
     def __iadd__(self, other: "Usage") -> "Usage":
         self.prompt_tokens += other.prompt_tokens
         self.completion_tokens += other.completion_tokens
         self.cost += other.cost
         self.calls += other.calls
+        self.cached_tokens += other.cached_tokens
         return self
 
 
@@ -99,4 +103,5 @@ def _usage(resp) -> Usage:
         # Нестандартное поле шлюза: в SDK его нет, в extra приходит числом.
         cost=float(getattr(u, "cost", 0.0) or 0.0),
         calls=1,
+        cached_tokens=getattr(getattr(u, "prompt_tokens_details", None), "cached_tokens", 0) or 0,
     )

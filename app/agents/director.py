@@ -636,6 +636,8 @@ class Director(Agent):
                 cost=result.usage.cost + self._sub_usage.cost,
                 llm_calls=result.usage.calls + self._sub_usage.calls,
                 duration_ms=duration_ms,
+                director_cached=result.usage.cached_tokens,
+                agents_cached=self._sub_usage.cached_tokens,
                 outcome=self._episode.outcome(),
                 problems=[redact(p) for p in self._episode.problems()],
             )

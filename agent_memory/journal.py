@@ -67,6 +67,8 @@ class TaskJournal(SqliteStore):
         ("cost", "REAL"), ("llm_calls", "INTEGER"),
         ("tool_calls", "INTEGER"), ("spawns", "INTEGER"),
         ("duration_ms", "INTEGER"),
+        # Сколько входа пришло из кэша провайдера — отдельно, у двух моделей он свой.
+        ("director_cached", "INTEGER"), ("agents_cached", "INTEGER"),
     )
 
     # Эпизод задачи: чем кончилась и что по дороге не вышло. Собирает код, а не
@@ -96,6 +98,8 @@ class TaskJournal(SqliteStore):
         cost: float = 0.0,
         llm_calls: int = 0,
         duration_ms: int = 0,
+        director_cached: int = 0,
+        agents_cached: int = 0,
         outcome: str = "ok",
         problems: list[str] | None = None,
     ) -> None:
@@ -105,14 +109,15 @@ class TaskJournal(SqliteStore):
                 "INSERT OR REPLACE INTO tasks "
                 "(id, ts, chat_id, intent, agent, tool_seq, iterations, success, summary, "
                 "director_in, director_out, agents_in, agents_out, cost, llm_calls, "
-                "tool_calls, spawns, duration_ms, outcome, problems) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "tool_calls, spawns, duration_ms, director_cached, agents_cached, "
+                "outcome, problems) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (task_id, ts, chat_id, intent, ",".join(agents),
                  json.dumps(tool_seq, ensure_ascii=False), iterations, int(success), summary,
                  director_in, director_out, agents_in, agents_out, cost, llm_calls,
                  # Число вызовов и спавнов — это длина уже переданных списков,
                  # отдельными аргументами их незачем дублировать.
-                 len(tool_seq), len(agents), duration_ms,
+                 len(tool_seq), len(agents), duration_ms, director_cached, agents_cached,
                  outcome, json.dumps(problems or [], ensure_ascii=False)),
             )
             conn.execute("DELETE FROM tasks_fts WHERE id = ?", (task_id,))

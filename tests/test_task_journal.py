@@ -275,7 +275,7 @@ async def test_summary_skips_preambles_of_tool_turns(tmp_path):
 
 
 def _two_spawns() -> ChoiceMessage:
-    return ChoiceMessage(content=None, usage=Usage(100, 20, 0.01, 1), tool_calls=[
+    return ChoiceMessage(content=None, usage=Usage(100, 20, 0.01, 1, 60), tool_calls=[
         ToolCall(id=f"c{i}", function=ToolCallFunction(
             name="spawn",
             arguments=json.dumps({"role": "спец", "skills": ["ops"], "task": t}),
@@ -290,9 +290,9 @@ async def test_journal_separates_director_and_agent_cost(tmp_path):
     director = Director(
         llm=FakeLLM([
             _two_spawns(),
-            ChoiceMessage(content="диск ок", tool_calls=None, usage=Usage(40, 6, 0.002, 1)),
+            ChoiceMessage(content="диск ок", tool_calls=None, usage=Usage(40, 6, 0.002, 1, 30)),
             ChoiceMessage(content="память ок", tool_calls=None, usage=Usage(40, 6, 0.002, 1)),
-            ChoiceMessage(content="Всё в порядке.", tool_calls=None, usage=Usage(150, 30, 0.02, 1)),
+            ChoiceMessage(content="Всё в порядке.", tool_calls=None, usage=Usage(150, 30, 0.02, 1, 90)),
         ]),
         journal=j, skills=_skill_with("host_query"),
     )
@@ -301,11 +301,12 @@ async def test_journal_separates_director_and_agent_cost(tmp_path):
     with sqlite3.connect(str(tmp_path / "tasks.db")) as conn:
         row = conn.execute(
             "SELECT director_in, director_out, agents_in, agents_out, cost, llm_calls, "
-            "tool_calls, spawns, duration_ms FROM tasks"
+            "tool_calls, spawns, duration_ms, director_cached, agents_cached FROM tasks"
         ).fetchone()
-    d_in, d_out, a_in, a_out, cost, llm_calls, tool_calls, spawns, duration = row
+    d_in, d_out, a_in, a_out, cost, llm_calls, tool_calls, spawns, duration, d_c, a_c = row
     assert (d_in, d_out) == (250, 50)
     assert (a_in, a_out) == (80, 12)
+    assert (d_c, a_c) == (150, 30)
     assert cost == pytest.approx(0.034)
     assert llm_calls == 4
     assert (tool_calls, spawns) == (2, 2)

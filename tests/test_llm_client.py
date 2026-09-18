@@ -38,6 +38,20 @@ async def test_chat_reports_usage():
     assert msg.usage == Usage(prompt_tokens=120, completion_tokens=8, cost=0.0004, calls=1)
 
 
+async def test_chat_reports_cached_prompt_tokens():
+    """Кэш провайдера: часть входа, пришедшая из кэша, стоит в разы дешевле —
+    без неё 190k токенов агента не переводятся в деньги."""
+    client = LLMClient(api_key="k", base_url="http://x", model="m")
+    fake_msg = type("M", (), {"content": "hi", "tool_calls": None})()
+    details = type("D", (), {"cached_tokens": 100})()
+    usage = type("U", (), {"prompt_tokens": 120, "completion_tokens": 8, "cost": 0.0004,
+                           "prompt_tokens_details": details})()
+    with patch.object(client._client.chat.completions, "create",
+                      new=AsyncMock(return_value=_resp(fake_msg, usage))):
+        msg = await client.chat([{"role": "user", "content": "hello"}])
+    assert msg.usage.cached_tokens == 100
+
+
 async def test_chat_without_usage_still_counts_the_call():
     """Не всякий провайдер отдаёт usage — ход всё равно случился и стоил денег."""
     client = LLMClient(api_key="k", base_url="http://x", model="m")
