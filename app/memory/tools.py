@@ -30,7 +30,11 @@ class RememberParams(BaseModel):
 
 class RecallParams(BaseModel):
     scope: str | None = Field(default=None, description="filter by scope (topic)")
-    query: str | None = Field(default=None, description="substring filter over key, value and description")
+    query: str | None = Field(
+        default=None,
+        description="words to match against key, value and description; several keys or "
+                    "words are fine — a fact matching any one of them is returned",
+    )
     history: bool = Field(
         default=False,
         description="also return the previous values of each fact with the dates they "

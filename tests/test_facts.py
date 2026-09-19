@@ -372,3 +372,21 @@ def test_migrates_facts_of_pre_versioning_schema(tmp_path):
     # факт из старой базы дальше живёт по общим правилам
     s.remember("host", "k1", "новое")
     assert s.recall(scope="host", history=True)[1]["history"][0]["value"] == "v1"
+
+
+def test_recall_query_of_several_keys_finds_each(tmp_path):
+    """Директор передаёт в query набор ключей из оглавления памяти — каждый
+    должен найтись. Одной подстрокой такой запрос не совпадал ни с чем."""
+    s = _store(tmp_path)
+    s.remember("bot", "db_topology", "БД glowshine в postgres")
+    s.remember("bot", "payments_table", "glowshine.payments")
+    s.remember("bot", "tables", "bot_users, payments")
+    s.remember("host", "ssh_port", "22")
+    found = s.recall(scope="bot", query="db_topology payments_table remnabot_container_name")
+    assert [f["key"] for f in found] == ["db_topology", "payments_table"]
+
+
+def test_recall_query_matches_description_word(tmp_path):
+    s = _store(tmp_path)
+    s.remember("host", "ssh_port", "22", description="порт SSH при правках фаервола")
+    assert [f["key"] for f in s.recall(query="фаервола порты")] == ["ssh_port"]

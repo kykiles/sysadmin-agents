@@ -207,8 +207,16 @@ class KnowledgeStore(SqliteStore):
             conds.append("scope = ?")
             params.append(scope)
         if query is not None:
-            conds.append("(key LIKE ? OR value LIKE ? OR description LIKE ?)")
-            params.extend([f"%{query}%"] * 3)
+            # По слову, а не целой строкой: в query приходит набор ключей из
+            # оглавления памяти, и одной подстрокой он не совпадал ни с чем —
+            # вместо нужных фактов Директор получал пустоту и собирал их заново.
+            words = query.split()
+            if words:
+                conds.append("(" + " OR ".join(
+                    ["(key LIKE ? OR value LIKE ? OR description LIKE ?)"] * len(words)
+                ) + ")")
+                for word in words:
+                    params.extend([f"%{word}%"] * 3)
         if conds:
             sql += " AND " + " AND ".join(conds)
         sql += " ORDER BY scope, key"
