@@ -613,3 +613,16 @@ def test_director_does_not_ask_for_confirmation_in_text():
     """Живой прогон: Директор просил «подтвердите» текстом, а потом кнопки спрашивали снова."""
     d = Director(llm=None, skills=_skill())
     assert "не проси «подтвердите» текстом" in d.system_prompt
+
+
+def test_prompt_puts_recall_before_plan():
+    """16.09 plan занял слот первого хода: recall_facts упал с 49% задач до 8%.
+
+    Инструкция про чтение памяти была условием без места в потоке, а у plan и
+    recall_experience место было («прежде чем», «начни с») — и в 21 задаче из 25
+    plan шёл первым вызовом, recall_facts не предшествовал ему ни разу.
+    """
+    prompt = Director(llm=None, skills=_skill()).system_prompt
+    assert "до plan и до spawn" in prompt
+    # чтение памяти описано раньше, чем её ведение: порядок в промпте и есть подсказка
+    assert prompt.index("recall_facts") < prompt.index("remember_fact")
