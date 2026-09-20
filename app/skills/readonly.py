@@ -126,9 +126,16 @@ def _secret(path: str) -> bool:
 
 
 def _valid(spec: Argv, args: list[str], seen: set[str] | None = None,
-           files: list[str] | None = None) -> bool:
+           files: list[str] | None = None, why: list[str] | None = None) -> bool:
     """`files` собирает позиционные читающих утилит — пути, чьё содержимое
-    окажется в выводе (шаблон grep сюда не попадает)."""
+    окажется в выводе (шаблон grep сюда не попадает).
+
+    `why` — причина отказа наружу, одной строкой. Общий текст «команда не входит
+    в список read-only» модель читала как запрет на всю форму вызова: получив его
+    на `journalctl -i -g 'a|b'` (виноват `-i`, у journalctl это `--file=PATH`),
+    агент решил, что блокируется `|` в шаблоне, и перешёл на один вызов вместо
+    одного шаблона — 63 вызова на задачу (живой разбор 20.09.2026).
+    """
     if spec.raw:
         return True
     seen = set() if seen is None else seen
@@ -138,21 +145,36 @@ def _valid(spec: Argv, args: list[str], seen: set[str] | None = None,
         a = args[i]
         i += 1
         if a.startswith("-") and a != "-":
-            i = _option(spec, a, args, i, seen)
-            if i is None:
+            nxt = _option(spec, a, args, i, seen)
+            if nxt is None:
+                _why(why, f"не принят аргумент `{a}`")
                 return False
+            i = nxt
             continue
         if spec.subcommands is not None:
             sub = spec.subcommands.get(a)
-            return sub is not None and _valid(sub, args[i:], seen, files)
+            if sub is None:
+                _why(why, f"не принята подкоманда `{a}`")
+                return False
+            return _valid(sub, args[i:], seen, files, why)
         pos.append(a)
     if spec.subcommands is not None:
+        _why(why, "нужна подкоманда")
         return False
     if spec.require and not spec.require & seen:
+        _why(why, f"нужна одна из опций: {', '.join(sorted(spec.require))}")
         return False
     if spec.reads and files is not None:
         files.extend(pos if spec.pattern_opts & seen or not spec.pattern_opts else pos[1:])
-    return spec.positional(pos)
+    if not spec.positional(pos):
+        _why(why, f"не приняты позиционные аргументы: {' '.join(pos) or '(их нет)'}")
+        return False
+    return True
+
+
+def _why(why: list[str] | None, reason: str) -> None:
+    if why is not None and not why:  # первая причина, дальше разбор уже свернулся
+        why.append(reason)
 
 
 def _option(spec: Argv, a: str, args: list[str], i: int, seen: set[str]) -> int | None:
@@ -611,9 +633,24 @@ def refusal(command: list[str], binaries: frozenset[str], exec_tool: str = "shel
     if reads_secret(command):
         return {"command": command,
                 "error": f"секретный файл — только через {exec_tool} с подтверждением"}
+    binary = command[0] if command else ""
+    spec = _SPECS.get(binary)
+    if binary in binaries and spec is not None:
+        # Утилита разрешена, споткнулись на аргументе — называем именно его, иначе
+        # модель чинит не то место и вместо одного вызова делает десять.
+        why: list[str] = []
+        _valid(spec, command[1:], why=why)
+        return {
+            "command": command,
+            "error": f"утилита `{binary}` доступна, но {why[0] if why else 'аргументы не приняты'}. "
+                     "Остальная команда в порядке — убери или замени этот аргумент. "
+                     "Это ограничение на опции, а не на текст: `|` внутри шаблона "
+                     "(grep -E, journalctl -g) работает, перебирать по одному слову не нужно. "
+                     f"Для изменяющих операций используй {exec_tool} (с подтверждением).",
+        }
     return {
         "command": command,
-        "error": "команда не входит в список read-only для этого агента "
+        "error": f"утилита `{binary}` недоступна этому агенту "
                  f"(доступны: {', '.join(sorted(binaries))}). "
                  "Принимается одна команда argv без sh -c, пайпов и редиректов — "
                  "независимые проверки делай отдельными вызовами. "

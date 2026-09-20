@@ -438,3 +438,26 @@ def test_secret_refusal_points_to_confirmation(command):
 
 def test_ordinary_refusal_unchanged():
     assert "секретный файл" not in refusal(["rm", "-rf", "/"], ALL)["error"]
+
+
+def test_refusal_names_the_offending_argument():
+    """Живой разбор 20.09: общий отказ на `journalctl -i -g 'a|b'` (виноват `-i`,
+    это --file=PATH) агент прочитал как запрет `|` и пошёл по слову на вызов."""
+    err = refusal(["journalctl", "CONTAINER_NAME=x", "-i", "-g", "a|b"], OBSERVE.binaries)["error"]
+    assert "`-i`" in err
+    assert "`journalctl` доступна" in err
+    assert "пайпов" not in err  # именно это слово уводило модель не туда
+
+
+def test_unknown_binary_refusal_keeps_the_list():
+    err = refusal(["sh", "-c", "ls | wc -l"], OBSERVE.binaries)["error"]
+    assert "недоступна" in err and "journalctl" in err
+
+
+@pytest.mark.parametrize("command", [
+    ["grep", "-cE", "a|b|c", "/var/log/syslog"],
+    ["journalctl", "-g", "code|login|auth", "--no-pager", "-n", "50"],
+])
+def test_alternation_in_pattern_is_read_only(command):
+    """`|` внутри шаблона — не пайп: один вызов вместо одного на слово."""
+    assert is_read_only(command, OBSERVE.binaries)
