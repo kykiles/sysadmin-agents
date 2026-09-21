@@ -354,7 +354,7 @@ class Director(Agent):
             for tc in msg.tool_calls or []:
                 if tc.function.name == "mark_step":
                     result.trace.append("mark_step")
-                    await sub._run_safe(tc)
+                    await sub._run_safe(self._run_id, tc)
 
         async def _spawn(role: str, skills: list[str], task: str, steps: list[int] | None = None) -> dict:
             # библиотеку читаем с инстанса — write_skill подменяет её на ходу

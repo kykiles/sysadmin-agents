@@ -8,20 +8,39 @@ from app.logging import get_logger, redact
 
 log = get_logger("audit")
 
+# След пишется по каждому вызову, а не только по подтверждаемым, — это 400+ строк
+# в активный день вместо трёх. Чтобы файл не рос без предела на маленьком VPS,
+# держим два поколения: текущее и предыдущее.
+_MAX_BYTES = 32 * 1024 * 1024
 
-def outcome(result: str) -> dict:
-    """Компактный итог tool-вызова для журнала: returncode (если есть) + превью."""
+
+def outcome(result: str, limit: int = 1000) -> dict:
+    """Компактный итог tool-вызова для журнала: returncode (если есть), объём и превью.
+
+    `bytes` — длина полного вывода: по превью не видно, вернулись три строки или
+    три мегабайта, а для разбора «на что ушли вызовы» это половина ответа.
+    """
     rc = None
     try:
         rc = json.loads(result).get("returncode")
     except (ValueError, TypeError, AttributeError):
         pass
-    return {"returncode": rc, "preview": result[:1000]}
+    return {"returncode": rc, "bytes": len(result), "preview": result[:limit]}
+
+
+def _rotate(path: Path) -> None:
+    try:
+        if path.stat().st_size < _MAX_BYTES:
+            return
+    except OSError:
+        return
+    path.replace(path.with_name(path.name + ".1"))
 
 
 def _record_sync(event: dict) -> None:
-    path = settings.audit_trail_path
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    path = Path(settings.audit_trail_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _rotate(path)
     line = json.dumps(
         {"ts": datetime.now(timezone.utc).isoformat(), **event},
         ensure_ascii=False, default=str,

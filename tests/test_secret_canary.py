@@ -138,4 +138,7 @@ async def test_canary_echoed_by_model_is_not_stored(env, store, capsys):
     assert all(CANARY not in c for c in channels)
     # сами записи состоялись — секрет в них заменён, а не потерян весь факт
     assert store.recall(scope="panel")[0]["value"] == "ключ <redacted>"
-    assert json.loads((env / "audit.jsonl").read_text(encoding="utf-8"))["tool"] == "mutate"
+    # след пишется по каждому вызову, изменяющий среди них — свой
+    trail = [json.loads(line) for line in
+             (env / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["tool"] for r in trail if r["decision"] != "auto"] == ["mutate"]

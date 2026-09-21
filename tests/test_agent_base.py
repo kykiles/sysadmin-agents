@@ -426,3 +426,38 @@ async def test_long_tool_output_reaches_model_clamped(monkeypatch):
     tool_msg = next(m for m in llm.last_messages if m["role"] == "tool")
     assert len(tool_msg["content"]) < 300
     assert "вырезано" in tool_msg["content"]
+
+
+async def test_every_tool_call_lands_in_the_trail(tmp_path, monkeypatch):
+    """Живой разбор 21.09: писались только подтверждаемые вызовы — 3 записи из 413,
+    и разбирать, на что ушла сотня вызовов, было не по чему."""
+    from app import audit
+    from app.agents.messages import Task
+
+    path = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(audit.settings, "audit_trail_path", str(path))
+
+    async def echo(value: str) -> dict:
+        return {"value": value}
+
+    class P(BaseModel):
+        value: str
+
+    def call(i, value):
+        return ToolCall(id=f"c{i}", function=ToolCallFunction(
+            name="echo", arguments=json.dumps({"value": value})))
+
+    llm = FakeLLM([
+        ChoiceMessage(content=None, tool_calls=[call(1, "раз"), call(2, "два")]),
+        ChoiceMessage(content="готово", tool_calls=None),
+    ])
+    agent = Agent("worker", "system", [Tool("echo", "echo", P, echo, Safety.SAFE)], llm)
+    await agent.handle(Task(id="t-1", run_id="run-7", content="сделай"))
+
+    trail = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [r["tool"] for r in trail] == ["echo", "echo"]
+    assert {r["run_id"] for r in trail} == {"run-7"}
+    assert [r["decision"] for r in trail] == ["auto", "auto"]
+    assert all(isinstance(r["ms"], int) for r in trail)
+    # безопасные вызовы идут пачкой параллельно — в след они ложатся по завершении
+    assert sorted(r["args"]["value"] for r in trail) == ["два", "раз"]

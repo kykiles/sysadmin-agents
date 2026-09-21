@@ -50,3 +50,24 @@ async def test_record_swallows_write_errors(monkeypatch):
     monkeypatch.setattr(audit, "_record_sync", boom)
     # не должно бросить исключение
     await audit.record(agent="a", tool="t", args={}, decision="approved", result={})
+
+
+def test_outcome_keeps_full_size_when_preview_is_cut():
+    """Из превью не видно, вернулись три строки или три мегабайта."""
+    out = audit.outcome("x" * 5000, limit=300)
+    assert out["bytes"] == 5000
+    assert len(out["preview"]) == 300
+
+
+async def test_rotation_keeps_two_generations(tmp_path, monkeypatch):
+    """Полный след — это 400+ строк в активный день: без предела файл съест диск."""
+    path = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(audit.settings, "audit_trail_path", str(path))
+    monkeypatch.setattr(audit, "_MAX_BYTES", 200)
+    for i in range(20):
+        await audit.record(agent="a", tool=f"t{i}", args={"x": "y" * 50},
+                           decision="auto", result={"preview": ""})
+    assert path.stat().st_size < 400
+    assert (tmp_path / "audit.jsonl.1").exists()
+    # последняя запись — в текущем файле, ничего не потеряно
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[-1])["tool"] == "t19"

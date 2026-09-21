@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import re
+import time
 import uuid
 
 from pydantic import ValidationError
@@ -19,6 +20,11 @@ log = get_logger("agent")
 # LLM часто отдаёт в аргументах сырые \d, \s из regex или \ из путей — JSON такое
 # не принимает. Экранируем всё, что не является валидным JSON-escape.
 _BAD_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu]|u[0-9a-fA-F]{4})')
+
+# Превью безопасного вызова короче: их сотни за день, и для разбора хватает
+# аргументов, кода возврата и объёма. У изменяющих превью прежнее — они наперечёт,
+# и по ним потом отвечают на вопрос «что именно сделали с сервером».
+_SAFE_PREVIEW_CHARS = 300
 
 
 def clamp_output(text: str, limit: int) -> str:
@@ -72,7 +78,9 @@ class Agent:
     def _find_tool(self, name: str) -> Tool | None:
         return next((t for t in self.tools if t.name == name), None)
 
-    async def _run_safe(self, tc) -> str:
+    async def _run_safe(self, run_id: str, tc) -> str:
+        started = time.monotonic()
+        args: dict = {}
         tool = self._find_tool(tc.function.name)
         if tool is None:
             out = json.dumps({"error": f"unknown tool {tc.function.name}"})
@@ -84,8 +92,28 @@ class Agent:
             else:
                 out = await tool.execute(args)
         self._note(tc.function.name, out)
+        await self._audit(run_id, tc.function.name, args, "auto", out, started,
+                          limit=_SAFE_PREVIEW_CHARS)
         log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=redact(str(out))[:200])
         return out
+
+    async def _audit(self, run_id: str, tool: str, args: dict, decision: str, out: str,
+                     started: float, limit: int = 1000) -> None:
+        """Строка следа на каждый вызов — и безопасный тоже.
+
+        Раньше писались только подтверждаемые: за активный день это 3 записи из 413,
+        и разбирать, на что агент потратил сотню вызовов, было не по чему — превью в
+        docker logs обрезано и живёт до ротации (живой разбор 21.09.2026).
+        """
+        await audit.record(
+            run_id=run_id,
+            agent=self.name,
+            tool=tool,
+            args=args,
+            decision=decision,
+            ms=round((time.monotonic() - started) * 1000),
+            result=audit.outcome(out, limit),
+        )
 
     def _note(self, tool: str, out: str) -> None:
         if (problem := error_of(out)) is not None:
@@ -94,11 +122,15 @@ class Agent:
             self._episode.tool_ok(tool)
 
     async def _run_dangerous(self, task: Task, tc, tool: Tool, reason: str) -> str:
+        started = time.monotonic()
         try:
             raw = parse_args(tc.function.arguments)
         except json.JSONDecodeError as e:
             out = json.dumps({"error": f"invalid tool arguments: {e}"})
             self._note(tool.name, out)
+            # Вызова не было, но попытка была: без неё в следе непонятно, почему
+            # агент топчется на месте и не доходит до подтверждения.
+            await self._audit(task.run_id or task.id, tool.name, {}, "invalid-args", out, started)
             return out
         intent = str(raw.get(INTENT_FIELD, "") or "").strip()
         # Подтверждается и исполняется один снимок: подготовлен до запроса, человеку
@@ -109,10 +141,12 @@ class Agent:
             out = json.dumps({"error": e.errors(include_url=False, include_context=False)},
                              ensure_ascii=False)
             self._note(tool.name, out)
+            await self._audit(task.run_id or task.id, tool.name, raw, "invalid-args", out, started)
             return out
         if tool.precheck is not None and (problem := await tool.precheck(prepared)):
             out = json.dumps({"error": problem}, ensure_ascii=False)
             self._note(tool.name, out)
+            await self._audit(task.run_id or task.id, tool.name, prepared, "precheck-refused", out, started)
             log.info("tool_call", agent=self.name, tool=tool.name, result_preview=redact(out)[:200])
             return out
         req = ConfirmationRequest(
@@ -140,13 +174,7 @@ class Agent:
                 "Не повторяй этот вызов — такой же запрос в этой задаче отклоняется без вопроса. "
                 "Заверши работу и сообщи, что действие не выполнено."
             )}, ensure_ascii=False)
-        await audit.record(
-            agent=self.name,
-            tool=tool.name,
-            args=prepared,
-            decision=decision.value,
-            result=audit.outcome(out),
-        )
+        await self._audit(task.run_id or task.id, tool.name, prepared, decision.value, out, started)
         log.info("tool_call", agent=self.name, tool=tc.function.name, result_preview=redact(str(out))[:200])
         return out
 
@@ -202,7 +230,7 @@ class Agent:
                 if not batch:
                     return
                 done = await asyncio.gather(
-                    *(self._run_safe(msg.tool_calls[i]) for i in batch),
+                    *(self._run_safe(task.run_id or task.id, msg.tool_calls[i]) for i in batch),
                     return_exceptions=True,
                 )
                 for i, out in zip(batch, done):
