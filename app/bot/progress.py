@@ -20,8 +20,14 @@ from app.logging import get_logger
 
 log = get_logger("progress")
 
-_NOTES = {"failed": "не выполнено", "skipped": "пропущен"}
+_NOTES = {"failed": "не выполнено", "skipped": "не понадобился", "dropped": "пропущен"}
 _ACTIVE = "в работе"
+# В итог задачи идут только пункты, которых никто не сделал: `failed` — на этом
+# пункте оборвалось или пользователь отказал, `dropped` — его никто не отметил.
+# Агентское `skipped` — решение по ходу дела, а не сбой: выяснилось, что пункт не
+# нужен (пользователя нет в панели — нечего смотреть и не о чем докладывать), и
+# задача с таким пунктом закончена нормально (живой разбор 21.09.2026).
+_UNDONE = ("failed", "dropped")
 
 
 @dataclass
@@ -172,7 +178,8 @@ class TelegramProgress:
         работающий агент (задача упала или её отменили), иначе «пропущен» — его никто
         не выполнил.
 
-        Возвращает итог доски для эпизода задачи: пункты, которые не сделаны.
+        Возвращает итог доски для эпизода задачи: пункты, которые не сделаны. Пункт,
+        который агент сам отметил ненужным, сюда не идёт — см. `_UNDONE`.
         """
         board = self._boards.pop(run_id, None)
         mine = {a for a, (r, _) in self._agents.items() if r == run_id}
@@ -182,11 +189,11 @@ class TelegramProgress:
             return []
         for s in board.steps:
             if s.status == "pending":
-                s.status = "failed" if s.active or s.waiting else "skipped"
+                s.status = "failed" if s.active or s.waiting else "dropped"
             s.active = s.waiting = 0
         await self._show(board)
         return [f"пункт «{s.text}» — {_NOTES[s.status]}"
-                for s in board.steps if s.status in _NOTES]
+                for s in board.steps if s.status in _UNDONE]
 
     def _current(self, agent_id: str) -> tuple[_Board, int] | None:
         """Пункт, над которым агент сейчас работает: пункты он ведёт по порядку,

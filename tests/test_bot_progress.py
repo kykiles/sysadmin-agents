@@ -45,7 +45,7 @@ async def test_agent_marks_its_steps_one_by_one():
     await p.mark("a#1", 2, "done")
     await p.mark("a#1", 3, "skipped")
     await p.finished("a#1")
-    assert _lines(bot) == "<s>1. Найти проект</s>\n<s>2. Пересобрать</s>\n3. Проверить — <i>пропущен</i>"
+    assert _lines(bot) == "<s>1. Найти проект</s>\n<s>2. Пересобрать</s>\n3. Проверить — <i>не понадобился</i>"
 
 
 async def test_agent_cannot_mark_foreign_step():
@@ -224,3 +224,47 @@ async def test_refused_rich_falls_back_to_html_for_the_whole_plan():
     assert bot.send_rich_message.await_count == 1
     assert "rich_message" not in bot.edit_message_text.await_args.kwargs
     assert _lines(bot) == "1. Один — <i>в работе</i>"
+
+
+async def test_step_the_agent_dropped_is_not_a_problem_of_the_task():
+    """Живой разбор 21.09: пользователя `felia` в панели нет — верный и полный ответ.
+    Агент честно отметил «проверить устройства» и «сообщить версию» ненужными, а
+    задача из-за этого ушла в журнал как partial."""
+    p, _ = _progress()
+    await p.plan("r", "t", ["Найти пользователя", "Проверить устройства", "Сообщить версию"])
+    await p.started("r", [1, 2, 3], "a#1")
+    await p.mark("a#1", 1, "done")
+    await p.mark("a#1", 2, "skipped")
+    await p.mark("a#1", 3, "skipped")
+    await p.finished("a#1")
+    assert await p.finish("r") == []
+
+
+async def test_unmarked_step_is_still_a_problem():
+    """Послабление — только на решение агента: пункт, который никто не тронул,
+    остаётся сбоем (на проде 16.09 агенты работали, но mark_step не звали)."""
+    p, _ = _progress()
+    await p.plan("r", "t", ["Пересобрать", "Проверить"])
+    await p.started("r", [1, 2], "a#1")
+    await p.mark("a#1", 1, "done")
+    await p.finished("a#1")
+    assert await p.finish("r") == ["пункт «Проверить» — пропущен"]
+
+
+async def test_failed_step_and_refusal_are_still_problems():
+    p, _ = _progress()
+    await p.plan("r", "t", ["Перезапустить", "Проверить"])
+    await p.started("r", [1, 2], "a#1")
+    await p.refused("a#1")
+    await p.mark("a#1", 2, "failed")
+    await p.finished("a#1")
+    assert await p.finish("r") == ["пункт «Перезапустить» — не выполнено",
+                                   "пункт «Проверить» — не выполнено"]
+
+
+async def test_task_broken_mid_step_is_a_problem():
+    """Агент не закончил: пункт в работе на момент конца задачи — «не выполнено»."""
+    p, _ = _progress()
+    await p.plan("r", "t", ["Считать логи"])
+    await p.started("r", [1], "a#1")
+    assert await p.finish("r") == ["пункт «Считать логи» — не выполнено"]
