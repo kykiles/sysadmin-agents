@@ -461,3 +461,51 @@ def test_unknown_binary_refusal_keeps_the_list():
 def test_alternation_in_pattern_is_read_only(command):
     """`|` внутри шаблона — не пайп: один вызов вместо одного на слово."""
     assert is_read_only(command, OBSERVE.binaries)
+
+
+def test_systemctl_failed_needs_no_subcommand():
+    """Живой разбор 21.09: `systemctl --failed` отбивался как «нужна подкоманда».
+    Это обычная форма «что упало» и тот же list-units, менять ею нечего."""
+    assert ro("systemctl", "--failed")
+    assert ro("systemctl", "--failed", "--no-pager")
+
+
+def test_bare_systemctl_still_refused():
+    """Послабление ровно на опцию-выборку: голый вызов остаётся отказом."""
+    assert not ro("systemctl")
+    assert not ro("systemctl", "--no-pager")
+
+
+def test_failed_option_does_not_open_mutating_subcommands():
+    assert not ro("systemctl", "--failed", "stop", "docker")
+    assert not ro("systemctl", "--failed", "restart", "nginx")
+
+
+def test_docker_inspect_refusal_points_to_the_tool():
+    """Живой разбор 21.09: `docker inspect` отбивался 8 раз за день у агентов,
+    которым `docker_inspect` был выдан — отказ про него молчал."""
+    err = refusal(["docker", "inspect", "caddy"], frozenset({"docker"}))["error"]
+    assert "docker_inspect" in err
+    assert "Config.Env" in err
+
+
+def test_docker_exec_refusal_points_to_the_tool():
+    err = refusal(["docker", "exec", "caddy", "cat", "/etc/caddy/Caddyfile"],
+                  frozenset({"docker"}))["error"]
+    assert "docker_exec" in err
+    assert "Mounts" in err
+
+
+def test_node_refusal_does_not_advertise_local_docker_tools():
+    """`docker_*` ходят в локальный демон: на ноде они не ответ, а тихо чужие данные
+    (контейнер `caddy` есть и здесь, и там)."""
+    err = refusal(["docker", "inspect", "remnanode"], frozenset({"docker"}), "ssh_exec")["error"]
+    assert "ssh_exec" in err
+    assert "docker_inspect" not in err
+    err = refusal(["docker", "exec", "remnanode", "ls"], frozenset({"docker"}), "ssh_exec")["error"]
+    assert "docker_exec" not in err
+
+
+def test_other_refusals_keep_the_general_advice():
+    err = refusal(["docker", "rm", "x"], frozenset({"docker"}))["error"]
+    assert "убери или замени этот аргумент" in err

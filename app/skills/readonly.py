@@ -65,6 +65,10 @@ class Argv:
     subcommands: dict[str, "Argv"] | None = None
     # хотя бы одна из этих опций обязана быть (здесь или до подкоманды)
     require: frozenset[str] = frozenset()
+    # подкоманду можно опустить, если указана одна из этих опций: она и есть
+    # выборка (`systemctl --failed` — то же, что `list-units --failed`).
+    # Голый вызов без них остаётся отказом.
+    bare_requires: frozenset[str] = frozenset()
     # опции-слова с одним дефисом (`find -name`, `openssl -noout`): не склейка букв
     single_dash: bool = False
     # аргументы не опции, а данные: echo печатает, test сравнивает
@@ -158,7 +162,7 @@ def _valid(spec: Argv, args: list[str], seen: set[str] | None = None,
                 return False
             return _valid(sub, args[i:], seen, files, why)
         pos.append(a)
-    if spec.subcommands is not None:
+    if spec.subcommands is not None and not spec.bare_requires & seen:
         _why(why, "нужна подкоманда")
         return False
     if spec.require and not spec.require & seen:
@@ -279,6 +283,9 @@ _SYSTEMCTL = Argv(
            )},
         "show": Argv(**_SYSTEMCTL_OPTS, positional=_UNITS, require=_opts("-p", "--property")),
     },
+    # `systemctl --failed` — обычная форма «что упало», и это list-units под другим
+    # именем. Отбивать её нечем: без подкоманды systemctl только перечисляет юниты.
+    bare_requires=_opts("--failed"),
 )
 
 # ip: после объекта — только просмотр. `ip netns exec`, `ip -batch`, `ip link set`
@@ -629,6 +636,38 @@ def reads_secret(command: list[str]) -> bool:
     return spec is not None and _valid(spec, command[1:], files=files) and any(map(_secret, files))
 
 
+# Куда идти вместо отбитой подкоманды: (утилита, подкоманда) → адрес на этом хосте
+# и адрес на ноде. Отказ без адреса модель читает как «сюда нельзя вообще» и
+# перебирает формы вызова: `docker inspect` отбивался 8 раз за день у агентов,
+# которым `docker_inspect` был выдан (живой разбор 21.09.2026). Для ноды эти
+# инструменты не ответ — они ходят в локальный демон, и одноимённый контейнер на
+# хосте молча отдал бы чужие данные.
+_ELSEWHERE = {
+    ("docker", "inspect"): (
+        "`inspect` печатает Config.Env с паролями, поэтому здесь его нет. То же самое, "
+        "но без Env, отдаёт инструмент `docker_inspect` (скил `docker`); полный вывод — "
+        "только через shell_exec с подтверждением.",
+        "`inspect` печатает Config.Env с паролями, поэтому здесь его нет. Локальные "
+        "инструменты `docker_*` до ноды не достают — полный inspect только через "
+        "ssh_exec с подтверждением; состояние, образ и порты видны в `docker ps --no-trunc`.",
+    ),
+    ("docker", "exec"): (
+        "команду внутри контейнера выполняет инструмент `docker_exec` (с подтверждением). "
+        "Конфиги обычно примонтированы с хоста — путь виден в Mounts у `docker_inspect`, "
+        "и тогда файл читается обычным `cat`.",
+        "команда внутри контейнера на ноде — только через ssh_exec с подтверждением. "
+        "Конфиги обычно примонтированы с ноды — путь можно взять из её compose-файла "
+        "и прочитать обычным `cat`.",
+    ),
+}
+
+
+def _elsewhere(command: list[str], exec_tool: str) -> str:
+    sub = next((a for a in command[1:] if not a.startswith("-")), "")
+    hint = _ELSEWHERE.get((command[0] if command else "", sub))
+    return "" if hint is None else hint[1 if exec_tool == "ssh_exec" else 0]
+
+
 def refusal(command: list[str], binaries: frozenset[str], exec_tool: str = "shell_exec") -> dict:
     if reads_secret(command):
         return {"command": command,
@@ -640,13 +679,16 @@ def refusal(command: list[str], binaries: frozenset[str], exec_tool: str = "shel
         # модель чинит не то место и вместо одного вызова делает десять.
         why: list[str] = []
         _valid(spec, command[1:], why=why)
+        # Есть адрес — ведём туда; иначе общий совет про лишний аргумент.
+        fix = _elsewhere(command, exec_tool) or (
+            "Остальная команда в порядке — убери или замени этот аргумент. "
+            "Это ограничение на опции, а не на текст: `|` внутри шаблона "
+            "(grep -E, journalctl -g) работает, перебирать по одному слову не нужно. "
+            f"Для изменяющих операций используй {exec_tool} (с подтверждением)."
+        )
         return {
             "command": command,
-            "error": f"утилита `{binary}` доступна, но {why[0] if why else 'аргументы не приняты'}. "
-                     "Остальная команда в порядке — убери или замени этот аргумент. "
-                     "Это ограничение на опции, а не на текст: `|` внутри шаблона "
-                     "(grep -E, journalctl -g) работает, перебирать по одному слову не нужно. "
-                     f"Для изменяющих операций используй {exec_tool} (с подтверждением).",
+            "error": f"утилита `{binary}` доступна, но {why[0] if why else 'аргументы не приняты'}. {fix}",
         }
     return {
         "command": command,
