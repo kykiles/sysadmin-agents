@@ -98,5 +98,9 @@ def render_review(outcome: ReviewOutcome) -> str:
             label = KIND_LABELS.get(f.get("kind", ""), "")
             lines.append(f"> `{f['scope']}/{f['key']}` = {f['value']}"
                          + (f" ({label})" if label else ""))
+            if f.get("replaces") is not None:
+                lines.append(f"> заменит: {f['replaces']}")
+            for s in f.get("similar") or []:
+                lines.append(f"> похоже на `{s['scope']}/{s['key']}` = {s['value']}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)

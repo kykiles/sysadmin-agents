@@ -204,6 +204,63 @@ async def test_consolidation_skips_facts_already_known(tmp_path):
     assert outcome.suggested == []
 
 
+def _journal_one_task(tmp_path):
+    from agent_memory.journal import TaskJournal
+
+    journal = TaskJournal(str(tmp_path / "tasks.db"))
+    journal.record(task_id="1", chat_id="c", intent="i", agents=[], tool_seq=[],
+                   iterations=1, success=True, summary="s")
+    return journal
+
+
+def _ctx_answering(tmp_path, content: str) -> LearningContext:
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(content=content))
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = llm, _journal_one_task(tmp_path)
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_consolidation_sees_fact_values(tmp_path):
+    """22.09: по одним ключам схема базы кабинета предложена второй раз под новым именем."""
+    ctx = _ctx_answering(tmp_path, "[]")
+    ctx.facts.remember("bot", "cabinet_db", "контейнер glowshine-postgres-1, база cabinet")
+
+    await run_review(ctx)
+
+    prompt = ctx.llm.chat.call_args.args[0][0]["content"]
+    assert "bot/cabinet_db = контейнер glowshine-postgres-1, база cabinet" in prompt
+
+
+@pytest.mark.asyncio
+async def test_consolidation_passes_refinement_of_known_key(tmp_path):
+    ctx = _ctx_answering(
+        tmp_path, '[{"scope": "bot", "key": "restart_cmd", "value": "docker compose up -d bot"}]')
+    ctx.facts.remember("bot", "restart_cmd", "docker compose restart")
+
+    outcome = await run_review(ctx)
+
+    assert [f["value"] for f in outcome.suggested] == ["docker compose up -d bot"]
+    # человек видит, что уточнение заменит
+    assert "заменит: docker compose restart" in render_review(outcome)
+
+
+@pytest.mark.asyncio
+async def test_suggestion_shows_similar_known_fact(tmp_path):
+    """Повтор под другим ключом не отбрасываем — поиск по словам грубый, — а показываем рядом."""
+    ctx = _ctx_answering(tmp_path, (
+        '[{"scope": "glowshine", "key": "cabinet_payments_db_schema", '
+        '"value": "таблица payments в glowshine-postgres-1"}]'))
+    ctx.facts.remember("bot", "payments_table", "таблица payments, контейнер glowshine-postgres-1")
+
+    outcome = await run_review(ctx)
+
+    assert [f["key"] for f in outcome.suggested] == ["cabinet_payments_db_schema"]
+    assert ("похоже на `bot/payments_table` = таблица payments, контейнер glowshine-postgres-1"
+            in render_review(outcome))
+
+
 @pytest.mark.asyncio
 async def test_consolidation_does_not_see_quarantined_facts(tmp_path):
     from agent_memory.journal import TaskJournal
