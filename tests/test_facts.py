@@ -248,6 +248,34 @@ def test_similar_finds_duplicate_under_another_key(tmp_path):
     assert s.similar("bot", "dialog_db", "история диалога лежит в /data/dialog.db") == []
 
 
+def test_similar_ignores_single_common_word(tmp_path):
+    """23.09: общее «glowshine» притягивало к предложению в /learn что попало."""
+    s = _store(tmp_path)
+    s.remember("remnawave", "test_user_uuid", "3d46a6bd", description="тестовый юзер glowshine")
+    s.remember("host", "glowshine_access_log", "/opt/remnawave/caddy/logs/cabinet.log — "
+               "access-лог Caddy для glowshine.space, client_ip в каждой строке")
+
+    found = s.similar("host", "behind_cloudflare",
+                      "трафик glowshine идёт через Cloudflare, client_ip в access-логе Caddy")
+
+    assert [f["key"] for f in found] == ["glowshine_access_log"]
+
+
+def test_similar_matches_inflected_words_and_keeps_only_close(tmp_path):
+    """Повтор 22.09 под другим ключом: слова в другой форме, общий фон — отсечь."""
+    s = _store(tmp_path)
+    s.remember("bot", "cabinet_db", "БД кабинета — контейнер glowshine-postgres-1, "
+               "таблица payments: user_id, amount, status, updated_at")
+    s.remember("bot", "referrals", "таблица referrals в glowshine: inviter_user_id, status")
+    s.remember("host", "ssh_port", "sshd слушает 2222")
+
+    found = s.similar("glowshine", "cabinet_payments_db_schema",
+                      "Схема базы кабинета: таблица payments (user_id, amount, status) "
+                      "в контейнере glowshine-postgres-1")
+
+    assert [f["key"] for f in found] == ["cabinet_db"]
+
+
 def test_migrates_db_without_new_columns(tmp_path):
     db = str(tmp_path / "old.db")
     with sqlite3.connect(db) as conn:

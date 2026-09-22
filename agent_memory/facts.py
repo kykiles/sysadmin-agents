@@ -1,4 +1,7 @@
+import math
+import re
 import sqlite3
+from collections import Counter
 from datetime import datetime, timezone
 
 from agent_memory.store import SqliteStore
@@ -50,6 +53,12 @@ _FACTS_LIVE_INDEX = (
 # но в оглавлении помечаются словом, иначе правило читается как факт об инфраструктуре.
 KIND_LABELS = {"lesson": "урок", "negative_rule": "не делать"}
 KINDS = ("stable", "snapshot", *KIND_LABELS)
+
+
+def _stems(text: str) -> set[str]:
+    """Основы слов для similar: дефисы и точки делят слово, чтобы
+    «glowshine-postgres-1» совпадало и с «glowshine», и с «postgres»."""
+    return {w[:6] for w in re.findall(r"\w+", text.lower()) if len(w) >= 5}
 
 
 def _norm(value: str) -> str:
@@ -266,23 +275,32 @@ class KnowledgeStore(SqliteStore):
         """Факты, похожие на записываемый, кроме него самого.
 
         Ключ ловит только буквальный дубль: тот же факт под другим именем ключа
-        мирно сосуществует со старым, и дальше непонятно, какой верен. Ищем по
-        словам значения и описания — грубо, зато без индекса.
+        мирно сосуществует со старым, и дальше непонятно, какой верен. Сравниваем
+        основы слов (первые шесть букв — грубо, но «access-логе» находит
+        «access-лог») с весом по редкости: имя проекта есть в половине фактов, и
+        23.09 одно общее «glowshine» притягивало к предложению в /learn что попало.
+        Похожим считаем набравшее вес двух слов, которые есть только в нём, и не
+        меньше 0.6 от лучшего — на фактах прода 23.09 так остаётся один-два
+        по делу вместо трёх наугад.
         """
-        words = sorted({w for w in text.lower().split() if len(w) >= 5}, key=len, reverse=True)
-        if not words:
+        query = _stems(text)
+        if not query:
             return []
-        conds = " OR ".join(["(lower(value) LIKE ? OR lower(description) LIKE ?)"] * len(words[:5]))
-        params: list[str] = []
-        for w in words[:5]:
-            params.extend([f"%{w}%"] * 2)
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT scope, key, value FROM facts WHERE valid_until IS NULL AND ({conds}) "
-                "AND NOT (scope = ? AND key = ?) ORDER BY hits DESC LIMIT ?",
-                (*params, scope, key, limit),
+                "SELECT scope, key, value, description, hits FROM facts "
+                "WHERE valid_until IS NULL AND NOT (scope = ? AND key = ?)",
+                (scope, key),
             ).fetchall()
-        return [{"scope": s, "key": k, "value": v} for s, k, v in rows]
+        docs = [(s, k, v, hits, _stems(f"{v} {d}")) for s, k, v, d, hits in rows]
+        df = Counter(x for *_, stems in docs for x in stems)
+        n = len(docs) + 1  # сам записываемый — тоже документ, иначе у одного факта вес 0
+        scored = [(sum(math.log(n / df[x]) for x in query & stems), hits, s, k, v)
+                  for s, k, v, hits, stems in docs]
+        best = max((sc[0] for sc in scored), default=0)
+        cut = max(2 * math.log(n), 0.6 * best)
+        top = sorted((sc for sc in scored if sc[0] >= cut), key=lambda sc: sc[:2], reverse=True)
+        return [{"scope": s, "key": k, "value": v} for _, _, s, k, v in top[:limit]]
 
     def index(self) -> list[dict]:
         """Оглавление памяти: области, а в них факты с описанием, сильные первыми.
