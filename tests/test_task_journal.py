@@ -379,7 +379,7 @@ async def test_unfinished_plan_step_lands_in_problems(tmp_path):
         ChoiceMessage(content=None, tool_calls=[ToolCall(id="c1", function=ToolCallFunction(
             name="spawn",
             arguments=json.dumps({"role": "спец", "skills": ["ops"], "task": "сними",
-                                  "steps": [1]})))]),
+                                  "steps": [1, 2]})))]),
         ChoiceMessage(content="Метрики сняты, чинить не стал.", tool_calls=None),
     ])
     agent_llm = FakeLLM([

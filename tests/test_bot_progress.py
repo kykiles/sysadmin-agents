@@ -113,7 +113,7 @@ async def test_finish_fails_steps_with_running_agent():
     await p.plan("r", "t", ["Пересобрать", "Проверить"])
     await p.started("r", [1], "a#1")
     await p.finish("r")
-    assert _lines(bot) == "1. Пересобрать — <i>не выполнено</i>\n2. Проверить — <i>пропущен</i>"
+    assert _lines(bot) == "1. Пересобрать — <i>не выполнено</i>\n2. Проверить — <i>не понадобился</i>"
     edits = bot.edit_message_text.await_count
     await p.finished("a#1")
     assert bot.edit_message_text.await_count == edits
@@ -146,7 +146,7 @@ async def test_finish_returns_unfinished_steps_for_the_episode():
     """Ш6: итог доски — вход эпизода задачи."""
     p, bot = _progress()
     await p.plan("r", "t", ["Найти проект", "Пересобрать", "Проверить"])
-    await p.started("r", [1, 2], "a#1")
+    await p.started("r", [1, 2, 3], "a#1")
     await p.mark("a#1", 1, "done")
     await p.mark("a#1", 2, "failed")
     await p.finished("a#1")
@@ -268,3 +268,30 @@ async def test_task_broken_mid_step_is_a_problem():
     await p.plan("r", "t", ["Считать логи"])
     await p.started("r", [1], "a#1")
     assert await p.finish("r") == ["пункт «Считать логи» — не выполнено"]
+
+
+async def test_step_nobody_was_given_is_not_a_problem():
+    """Разбор журнала 22.09 (c6e11258): Директор вписал в план «Собрать итоговый
+    отчёт», поручил агенту только пункты 1–2 и отчёт собрал сам — ответ полный,
+    а задача ушла в журнал как partial."""
+    p, bot = _progress()
+    await p.plan("r", "t", ["Считать визиты", "Сравнить по дням", "Собрать итоговый отчёт"])
+    await p.started("r", [1, 2], "a#1")
+    await p.mark("a#1", 1, "done")
+    await p.mark("a#1", 2, "done")
+    await p.finished("a#1")
+    assert await p.finish("r") == []
+    assert _lines(bot).endswith("3. Собрать итоговый отчёт — <i>не понадобился</i>")
+
+
+async def test_step_given_to_a_finished_agent_stays_assigned():
+    """Пункт поручали, агент ушёл, не отметив, — «пропущен», даже если потом
+    другой агент получил другие пункты."""
+    p, _ = _progress()
+    await p.plan("r", "t", ["Один", "Два"])
+    await p.started("r", [1], "a#1")
+    await p.finished("a#1")
+    await p.started("r", [2], "a#2")
+    await p.mark("a#2", 2, "done")
+    await p.finished("a#2")
+    assert await p.finish("r") == ["пункт «Один» — пропущен"]
