@@ -53,8 +53,13 @@ class Episode:
         for line in lines:
             self._add(line)
 
+    def gave_up(self, reason: str) -> None:
+        """Спавнутый агент упёрся в лимит итераций: задача не оборвалась —
+        Директор получит его частичный ответ и может доделать иначе."""
+        self._add(reason)
+
     def broke(self, reason: str) -> None:
-        """Задача оборвалась: исключение или лимит итераций."""
+        """Задача оборвалась: исключение или лимит итераций Директора."""
         self._fatal = True
         self._add(reason)
 

@@ -115,3 +115,19 @@ async def test_iteration_limit_is_failed(monkeypatch):
 
     assert agent._episode.outcome() == "failed"
     assert "лимит итераций" in agent._episode.problems()[0]
+
+
+async def test_spawned_agent_limit_is_partial(monkeypatch):
+    """Подагент на лимите — проблема задачи, а не обрыв: Директор может доделать."""
+    monkeypatch.setattr(settings, "agent_max_iterations", 2)
+    episode = Episode()
+    tool = _flaky([{"ok": 1}, {"ok": 2}])
+    agent = Agent(name="spawned:host", system_prompt="sys", tools=[tool],
+                  llm=FakeLLM([_call("probe", "c1"), _call("probe", "c2")]),
+                  episode=episode)
+    await agent.handle(Task(content="крутись"))
+
+    assert episode.outcome() == "partial"
+    assert episode.problems() == [
+        "spawned:host: достигнут лимит итераций (2), ответ может быть неполным"
+    ]

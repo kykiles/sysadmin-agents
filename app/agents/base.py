@@ -72,6 +72,8 @@ class Agent:
         # Что за задачу пошло не так. Директор передаёт сюда свой эпизод при
         # спавне, поэтому проблемы агентов попадают в тот же журнал.
         self._episode = episode or Episode()
+        # Чужой эпизод — значит, агент спавнут: его упор в лимит не обрывает задачу.
+        self._spawned = episode is not None
         # Имя у двух параллельных спавнов с одинаковыми навыками совпадает — id нет.
         self.agent_id = f"{name}#{uuid.uuid4().hex[:8]}"
 
@@ -254,7 +256,10 @@ class Agent:
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": content})
         limit = settings.agent_max_iterations
         note = f"достигнут лимит итераций ({limit}), ответ может быть неполным"
-        self._episode.broke(f"{self.name}: {note}")
+        if self._spawned:
+            self._episode.gave_up(f"{self.name}: {note}")
+        else:
+            self._episode.broke(f"{self.name}: {note}")
         content = redact("\n\n".join([*said, note]))
         if self._memory:
             await asyncio.to_thread(self._memory.append, task.chat_id, "user", redact(task.content))
