@@ -626,3 +626,23 @@ def test_prompt_puts_recall_before_plan():
     assert "до plan и до spawn" in prompt
     # чтение памяти описано раньше, чем её ведение: порядок в промпте и есть подсказка
     assert prompt.index("recall_facts") < prompt.index("remember_fact")
+
+
+async def test_spawn_result_reminds_to_remember_what_agent_found(tmp_path):
+    """22.09: агенты находили контейнер базы, а remember_fact не звался ни разу за 20 задач."""
+    llm = FakeLLM([
+        _call("spawn", {"role": "копирайтер", "skills": ["writer"], "task": "напиши пост"}),
+        ChoiceMessage(content="готово", tool_calls=None),
+        ChoiceMessage(content="Пост готов.", tool_calls=None),
+    ])
+    d = Director(llm=llm, skills=_skill(), facts=KnowledgeStore(str(tmp_path / "f.db")))
+    await d.handle(Task(content="сделай пост"))
+
+    spawned = json.loads(llm.seen[-1][-1]["content"])
+    assert spawned["result"] == "готово"
+    assert "remember_fact" in spawned["note"]
+
+
+def test_prompt_says_when_to_remember_before_warning():
+    prompt = Director(llm=None, skills=_skill()).system_prompt
+    assert prompt.index("Когда писать через remember_fact") < prompt.index("Разовые находки")

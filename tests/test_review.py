@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -301,3 +302,105 @@ async def test_unknown_kind_falls_back_to_stable(tmp_path):
     outcome = await run_review(ctx)
 
     assert [f["kind"] for f in outcome.suggested] == ["stable"]
+
+
+# ---------- отчёты агентов: устройство, добытое по дороге ----------
+
+def _transcript(*reports: str) -> str:
+    """Ход Директора: по spawn на отчёт, плюс вызов памяти, который отчётом не считается."""
+    messages: list[dict] = [{"role": "user", "content": "сколько оплат"}]
+    for n, report in enumerate(reports):
+        messages.append({"role": "assistant", "content": None, "tool_calls": [
+            {"id": f"s{n}", "type": "function", "function": {"name": "spawn", "arguments": "{}"}},
+            {"id": f"r{n}", "type": "function", "function": {"name": "recall_facts", "arguments": "{}"}},
+        ]})
+        messages.append({"role": "tool", "tool_call_id": f"s{n}", "content": json.dumps(
+            {"agent": "spawned:db", "result": report, "success": True}, ensure_ascii=False)})
+        messages.append({"role": "tool", "tool_call_id": f"r{n}",
+                         "content": '{"facts": "из памяти"}'})
+    return json.dumps(messages, ensure_ascii=False)
+
+
+def _journal_with_report(tmp_path, *reports: str):
+    from agent_memory.journal import TaskJournal
+
+    journal = TaskJournal(str(tmp_path / "tasks.db"))
+    journal.record(task_id="1", chat_id="c", intent="сколько оплат", agents=[], tool_seq=[],
+                   iterations=1, success=True, summary="46 оплат")
+    journal.save_transcript("1", _transcript(*reports), keep=20)
+    return journal
+
+
+async def _prompt_for(ctx, journal) -> str:
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(content="[]"))
+    ctx.llm, ctx.journal = llm, journal
+    await run_review(ctx)
+    return llm.chat.call_args.args[0][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_consolidation_reads_agent_reports(tmp_path):
+    """22.09: БД кабинета нашлась в glowshine-postgres-1, а в итоге задачи — только «46 оплат»."""
+    journal = _journal_with_report(tmp_path, "база кабинета — контейнер glowshine-postgres-1")
+
+    prompt = await _prompt_for(_ctx(tmp_path), journal)
+
+    assert "отчёт агента: база кабинета — контейнер glowshine-postgres-1" in prompt
+    assert "из памяти" not in prompt  # чужие инструменты Директора — не отчёты
+
+
+@pytest.mark.asyncio
+async def test_long_agent_report_keeps_its_tail(tmp_path):
+    report = "н" * 5000 + "ИТОГ: таблица payments"
+    journal = _journal_with_report(tmp_path, report)
+
+    prompt = await _prompt_for(_ctx(tmp_path), journal)
+
+    assert "ИТОГ: таблица payments" in prompt
+    assert "н" * 3000 not in prompt
+
+
+@pytest.mark.asyncio
+async def test_reports_stop_at_pass_budget(tmp_path):
+    reports = [f"отчёт {n} " + "x" * 2990 for n in range(25)]
+    journal = _journal_with_report(tmp_path, *reports)
+
+    prompt = await _prompt_for(_ctx(tmp_path), journal)
+
+    assert "отчёт 0 " in prompt and "отчёт 19 " in prompt
+    assert "отчёт 20 " not in prompt
+
+
+@pytest.mark.asyncio
+async def test_clamped_spawn_output_is_still_a_report(tmp_path):
+    """Вывод длиннее TOOL_OUTPUT_MAX_CHARS режется посередине — JSON не собрать, берём как есть."""
+    from agent_memory.journal import TaskJournal
+
+    journal = TaskJournal(str(tmp_path / "tasks.db"))
+    journal.record(task_id="1", chat_id="c", intent="i", agents=[], tool_seq=[],
+                   iterations=1, success=True, summary="s")
+    journal.save_transcript("1", json.dumps([
+        {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "s", "type": "function", "function": {"name": "spawn", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "s",
+         "content": '{"agent": "a", "result": "начало\n… вырезано 9 символов …\nлог в /var/log/x"}'},
+    ], ensure_ascii=False), keep=20)
+
+    prompt = await _prompt_for(_ctx(tmp_path), journal)
+
+    assert "лог в /var/log/x" in prompt
+
+
+@pytest.mark.asyncio
+async def test_task_without_transcript_renders_as_before(tmp_path):
+    from agent_memory.journal import TaskJournal
+
+    journal = TaskJournal(str(tmp_path / "tasks.db"))
+    journal.record(task_id="1", chat_id="c", intent="почему упал бот", agents=[], tool_seq=[],
+                   iterations=1, success=True, summary="перезапустили compose")
+
+    prompt = await _prompt_for(_ctx(tmp_path), journal)
+
+    # строка задачи — последняя в блоке, под ней отчётов нет
+    assert "- почему упал бот → перезапустили compose\n\n" in prompt
