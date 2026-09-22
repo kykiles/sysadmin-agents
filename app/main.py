@@ -26,12 +26,16 @@ async def main() -> None:
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
         model=settings.llm_model,
+        timeout=settings.llm_timeout_seconds,
+        max_retries=settings.llm_max_retries,
     )
     # Временные агенты, монитор и консолидация остаются на LLM_MODEL.
     director_llm = LLMClient(
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
         model=settings.director_llm_model,
+        timeout=settings.llm_timeout_seconds,
+        max_retries=settings.llm_max_retries,
     ) if settings.director_llm_model else llm
     # Библиотека скилов лежит рядом с пакетом, а не внутри него: ядро не знает,
     # из какой предметной области будут задачи.

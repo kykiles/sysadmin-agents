@@ -1,6 +1,11 @@
 import asyncio
+import time
 from dataclasses import dataclass, field
 from openai import AsyncOpenAI, APIError, NOT_GIVEN
+
+from app.logging import get_logger
+
+log = get_logger("llm")
 
 
 @dataclass
@@ -51,8 +56,10 @@ class ChoiceMessage:
 
 
 class LLMClient:
-    def __init__(self, api_key: str, base_url: str, model: str):
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    def __init__(self, api_key: str, base_url: str, model: str,
+                 timeout: float = 360, max_retries: int = 1):
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url,
+                                   timeout=timeout, max_retries=max_retries)
         self._model = model
 
     async def chat(
@@ -62,6 +69,7 @@ class LLMClient:
         # failed" — не наша ошибка запроса, а транзиент. SDK такой 400 не
         # ретраит, поэтому дожимаем сами.
         # ponytail: 3 попытки, фикс-бэкофф; вынести в настройки если понадобится
+        started = time.monotonic()
         for attempt in range(3):
             try:
                 resp = await self._client.chat.completions.create(
@@ -77,6 +85,8 @@ class LLMClient:
                 if attempt == 2 or "Upstream request failed" not in str(e):
                     raise
                 await asyncio.sleep(1.5 * (attempt + 1))
+        usage = _usage(resp)
+        _log_call(self._model, resp, usage, int((time.monotonic() - started) * 1000))
         m = resp.choices[0].message
         tool_calls = None
         if m.tool_calls:
@@ -89,8 +99,23 @@ class LLMClient:
             content=m.content,
             tool_calls=tool_calls,
             reasoning_content=getattr(m, "reasoning_content", None),
-            usage=_usage(resp),
+            usage=usage,
         )
+
+
+def _log_call(model: str, resp, usage: Usage, ms: int) -> None:
+    """Ход модели — главная статья времени задачи, а без строки лога не видно,
+    долго ли он шёл и не обрезан ли по длине (обрезанный JSON аргументов)."""
+    finish = getattr(resp.choices[0], "finish_reason", None)
+    details = getattr(getattr(resp, "usage", None), "completion_tokens_details", None)
+    fields = dict(model=model, ms=ms, prompt=usage.prompt_tokens,
+                  completion=usage.completion_tokens,
+                  reasoning=getattr(details, "reasoning_tokens", None),
+                  cached=usage.cached_tokens, finish=finish)
+    if finish == "length":
+        log.warning("llm_call_truncated", **fields)
+    else:
+        log.info("llm_call", **fields)
 
 
 def _usage(resp) -> Usage:

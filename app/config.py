@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # агенты гоняют длинные циклы с инструментами — модели им нужны разные по цене.
     # Пусто — Директор на LLM_MODEL, как все.
     director_llm_model: str = Field(default="", alias="DIRECTOR_LLM_MODEL")
+    # Дефолт SDK — 600 с × 2 повтора: зависший ход deepseek держал задачу 10+ минут.
+    # Рабочий ход агента бывает до ~280 с, поэтому меньше 360 не ставить.
+    llm_timeout_seconds: float = Field(default=360, alias="LLM_TIMEOUT_SECONDS")
+    llm_max_retries: int = Field(default=1, alias="LLM_MAX_RETRIES")
 
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
     telegram_user_id: int = Field(alias="TELEGRAM_USER_ID")

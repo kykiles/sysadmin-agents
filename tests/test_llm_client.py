@@ -1,5 +1,8 @@
 import json
 from unittest.mock import AsyncMock, patch
+
+from structlog.testing import capture_logs
+
 from app.llm.client import LLMClient, Usage
 
 
@@ -60,3 +63,38 @@ async def test_chat_without_usage_still_counts_the_call():
                       new=AsyncMock(return_value=_resp(fake_msg))):
         msg = await client.chat([{"role": "user", "content": "hello"}])
     assert msg.usage == Usage(calls=1)
+
+
+def test_timeout_and_retries_reach_sdk():
+    """Дефолт SDK — 600 с × 2 повтора: зависший ход держал задачу больше 10 минут."""
+    client = LLMClient(api_key="k", base_url="http://x", model="m", timeout=360, max_retries=1)
+    assert client._client.timeout == 360
+    assert client._client.max_retries == 1
+
+
+async def test_chat_logs_duration_tokens_and_finish_reason():
+    client = LLMClient(api_key="k", base_url="http://x", model="m")
+    fake_msg = type("M", (), {"content": "hi", "tool_calls": None})()
+    details = type("D", (), {"reasoning_tokens": 5})()
+    usage = type("U", (), {"prompt_tokens": 120, "completion_tokens": 8,
+                           "completion_tokens_details": details})()
+    choice = type("C", (), {"message": fake_msg, "finish_reason": "stop"})()
+    resp = type("R", (), {"choices": [choice], "usage": usage})()
+    with capture_logs() as logs, patch.object(client._client.chat.completions, "create",
+                                              new=AsyncMock(return_value=resp)):
+        await client.chat([{"role": "user", "content": "hello"}])
+    [entry] = [e for e in logs if e["event"] == "llm_call"]
+    assert entry["model"] == "m" and entry["finish"] == "stop"
+    assert entry["prompt"] == 120 and entry["completion"] == 8 and entry["reasoning"] == 5
+    assert isinstance(entry["ms"], int)
+
+
+async def test_chat_warns_when_answer_cut_by_length():
+    """Обрезка по длине — это обрезанный JSON аргументов инструмента."""
+    client = LLMClient(api_key="k", base_url="http://x", model="m")
+    fake_msg = type("M", (), {"content": None, "tool_calls": None})()
+    choice = type("C", (), {"message": fake_msg, "finish_reason": "length"})()
+    with capture_logs() as logs, patch.object(client._client.chat.completions, "create",
+                                              new=AsyncMock(return_value=type("R", (), {"choices": [choice]})())):
+        await client.chat([{"role": "user", "content": "hello"}])
+    assert [e["log_level"] for e in logs if e["event"] == "llm_call_truncated"] == ["warning"]
