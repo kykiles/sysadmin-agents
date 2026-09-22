@@ -49,8 +49,25 @@ class Result(BaseModel):
 _SCOPE_KEYS = ("host", "container", "project", "site", "skill", "script")
 _OPAQUE_PROGRAMS = {
     "sh", "bash", "dash", "ash", "zsh", "env", "sudo", "su", "nsenter", "busybox",
-    "python", "python3", "perl", "node", "xargs", "timeout", "nohup",
+    "python", "python3", "perl", "node", "xargs", "timeout", "nohup", "ssh",
 }
+# docker — не одна программа: `restart` и `exec` разрешать вместе нельзя. Эти
+# подкоманды исполняют что угодно (внутри контейнера или с томом `/:/host`).
+_DOCKER_GROUPS = {"compose", "container"}
+_DOCKER_OPAQUE = {"exec", "run", "create"}
+
+
+def _docker_program(args: list) -> str | None:
+    """`docker restart` / `docker compose up`; None — подкоманда исполняет что угодно
+    или скрыта за опциями (`docker --context x exec`): её не разбираем, кнопки нет."""
+    words = ["docker"]
+    for arg in args:
+        if not isinstance(arg, str) or arg.startswith("-"):
+            return None
+        words.append(arg)
+        if arg not in _DOCKER_GROUPS:
+            return None if arg in _DOCKER_OPAQUE else " ".join(words)
+    return None
 
 
 class ConfirmationRequest(BaseModel):
@@ -75,7 +92,11 @@ class ConfirmationRequest(BaseModel):
         if isinstance(command, list) and command and isinstance(command[0], str):
             # По имени оболочки не видно, что она исполнит: разрешить `sh` навсегда —
             # разрешить любой скрипт.
-            if command[0].rsplit("/", 1)[-1] in _OPAQUE_PROGRAMS:
+            name = command[0].rsplit("/", 1)[-1]
+            if name in _OPAQUE_PROGRAMS:
                 return None
-            parts.append(f"program={command[0]}")
+            program = _docker_program(command[1:]) if name == "docker" else command[0]
+            if program is None:
+                return None
+            parts.append(f"program={program}")
         return f"{self.tool_name}: {', '.join(parts)}" if parts else None

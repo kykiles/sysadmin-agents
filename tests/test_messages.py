@@ -29,6 +29,35 @@ def test_scope_names_tool_target_and_program():
     assert req.scope() == "ssh_exec: host=node-a, program=systemctl"
 
 
+def _shell_scope(*command):
+    return ConfirmationRequest(run_id="r", agent_id="a", tool_call_id="c", tool_name="shell_exec",
+                               args={"command": list(command)}).scope()
+
+
+def test_scope_names_docker_subcommand():
+    assert _shell_scope("docker", "restart", "x") == "shell_exec: program=docker restart"
+    assert _shell_scope("docker", "compose", "restart") == "shell_exec: program=docker compose restart"
+
+
+def test_no_scope_for_docker_that_runs_arbitrary_commands():
+    # «Да на всё» на `docker exec … psql` не должно открывать `docker exec … sh -c`,
+    # `docker run -v /:/host` и `docker rm`.
+    assert _shell_scope("docker", "exec", "pg", "psql", "-c", r"\dt") is None
+    assert _shell_scope("docker", "run", "-v", "/:/host", "alpine") is None
+    assert _shell_scope("docker", "create", "alpine") is None
+    assert _shell_scope("docker", "container", "exec", "pg", "sh") is None
+    assert _shell_scope("docker", "compose", "exec", "db", "psql") is None
+    assert _shell_scope("docker", "compose", "run", "db", "sh") is None
+    # Подкоманду за опциями не ищем: кнопки нет.
+    assert _shell_scope("docker", "--context", "x", "ps") is None
+    assert _shell_scope("docker", "compose", "-f", "x.yml", "up") is None
+    assert _shell_scope("docker") is None
+
+
+def test_no_scope_for_ssh_in_shell():
+    assert _shell_scope("ssh", "node-a", "rm", "-rf", "/") is None
+
+
 def test_confirmation_request_ids_are_separate():
     req = ConfirmationRequest(run_id="r", agent_id="a#1", tool_call_id="c1",
                               tool_name="t", args={})
