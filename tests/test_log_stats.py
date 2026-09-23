@@ -21,7 +21,7 @@ LOG = "\n".join([
 
 @pytest.fixture
 def host(monkeypatch):
-    """Подменяет хост: stat отдаёт размер, cat — содержимое лога."""
+    """Подменяет хост: stat отдаёт размер, zcat — содержимое лога."""
     calls = []
 
     async def fake_host_exec(command):
@@ -93,7 +93,17 @@ async def test_reads_several_files_in_one_call(host):
     """Окно задевает текущий файл и ротированный — счёт общий, вызов один."""
     await st.log_stats(paths=["/var/log/cabinet.log", "/var/log/cabinet.log.1"],
                        extract=r'"status":([0-9]+)')
-    assert host[-1] == ["cat", "/var/log/cabinet.log", "/var/log/cabinet.log.1"]
+    assert host[-1] == ["zcat", "-f", "/var/log/cabinet.log", "/var/log/cabinet.log.1"]
+
+
+async def test_reads_gz_archive_with_current_log(host):
+    """Окно залезло в ротированный `.gz` (задача 703537e5, 22.09): читается тем же вызовом,
+    без ухода в `python3 -c` с подтверждениями."""
+    out = await st.log_stats(paths=["/opt/remnawave/caddy/logs/cabinet.log",
+                                    "/opt/remnawave/caddy/logs/cabinet-2026-09-22T13-10-34.213.log.gz"],
+                             extract=r'"status":([0-9]+)')
+    assert host[-1][:2] == ["zcat", "-f"]
+    assert out["extracted"] == 4
 
 
 async def test_refuses_secret_file(host):
@@ -137,6 +147,19 @@ async def test_refuses_file_over_the_cap(monkeypatch):
     monkeypatch.setattr(st, "host_exec", fake_host_exec)
     out = await st.log_stats(paths=["/var/log/huge.log"], extract=".")
     assert "МБ" in out["error"]
+
+
+async def test_refuses_when_unpacked_archive_is_over_the_cap(monkeypatch):
+    """`stat` видит сжатый размер — предел проверяется и по распакованному."""
+    async def fake_host_exec(command):
+        if command[0] == "stat":
+            return {"returncode": 0, "stdout": "1024\n", "stderr": ""}
+        return {"returncode": 0, "stdout": "x" * (st._MAX_BYTES + 1), "stderr": ""}
+
+    monkeypatch.setattr(st, "host_exec", fake_host_exec)
+    out = await st.log_stats(paths=["/var/log/old.log.gz"], extract=".")
+    assert "МБ" in out["error"]
+    assert "lines" not in out
 
 
 def test_log_stats_is_safe_and_declared():

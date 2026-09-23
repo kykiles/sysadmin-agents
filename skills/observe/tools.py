@@ -50,15 +50,26 @@ class LogStatsParams(BaseModel):
 
 
 def _refuse_unreadable(paths: list[str]) -> dict | None:
-    """Ни байта сверх host_query: тот же `cat`, та же общая классификация.
+    """Ни байта сверх host_query: тот же `zcat -f`, та же общая классификация.
 
     Инструмент не расширяет доступ, он избавляет от перебора grep'ом — поэтому
-    путь проходит ровно ту проверку, что прошёл бы вызов `cat` руками.
+    путь проходит ровно ту проверку, что прошёл бы вызов `zcat -f` руками.
     """
     for path in paths:
-        if not is_read_only(["cat", path], ACCESS.binaries):
-            return refusal(["cat", path], ACCESS.binaries)
+        if not is_read_only(_read_argv([path]), ACCESS.binaries):
+            return refusal(_read_argv([path]), ACCESS.binaries)
     return None
+
+
+def _read_argv(paths: list[str]) -> list[str]:
+    # `-f` отдаёт несжатый файл как есть: текущий лог и ротированный `.gz` — одним вызовом.
+    return ["zcat", "-f", *paths]
+
+
+def _too_big(paths: list[str], size: int) -> dict:
+    return {"files": paths, "bytes": size,
+            "error": f"{size // 1024 // 1024} МБ — больше {_MAX_BYTES // 1024 // 1024} МБ; "
+                     "возьми файл поменьше или сузь выборку через host_query"}
 
 
 async def _total_size(paths: list[str]) -> tuple[int, str]:
@@ -136,15 +147,17 @@ async def log_stats(paths: list[str], extract: str, where: str | None = None,
     if problem:
         return {"files": paths, "error": problem}
     if size > _MAX_BYTES:
-        return {"files": paths, "bytes": size,
-                "error": f"{size // 1024 // 1024} МБ — больше {_MAX_BYTES // 1024 // 1024} МБ; "
-                         "возьми файл поменьше или сузь выборку через host_query"}
+        return _too_big(paths, size)
 
-    res = await host_exec(["cat", *paths])
+    res = await host_exec(_read_argv(paths))
     if res.get("returncode"):
         return {"files": paths, "error": (res.get("stderr") or "").strip() or "не прочитать"}
+    text = res.get("stdout") or ""
+    # `stat` видит сжатый размер: `.gz` лога распаковывается раз в 10–15 больше.
+    if len(text) > _MAX_BYTES:
+        return _too_big(paths, len(text))
     stats = await asyncio.to_thread(
-        _count, res.get("stdout") or "", rx, rx_where, rx_win,
+        _count, text, rx, rx_where, rx_win,
         float(window["min"]) if window else 0.0,
         float(window["max"]) if window else 0.0, top,
     )
@@ -160,7 +173,7 @@ def build_tools() -> list[Tool]:
              "Count a distribution over log FILES on the host: how many times each value of "
              "`extract` occurs, optionally only on lines matching `where` and inside a numeric "
              "`window` (e.g. a unix-time range). Reading, filtering and counting happen outside "
-             "the model — one call replaces a series of greps. Every answer carries a real `sample` "
+             "the model — one call replaces a series of greps. Rotated `.gz` archives are read as is. Every answer carries a real `sample` "
              "line: fix your regex against it instead of guessing. Safe, read-only.",
              LogStatsParams, log_stats, Safety.SAFE),
     ]
