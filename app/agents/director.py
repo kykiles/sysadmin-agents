@@ -249,6 +249,31 @@ def _steps_block(steps: dict[int, str]) -> str:
     )
 
 
+def _cited_facts(facts: KnowledgeStore | None, task: str, limit: int = 5) -> str:
+    """Значения фактов, на чьи ключи ссылается поручение агенту.
+
+    Прод 23.09 (6918b8cf): Директор написал «база описана фактом cabinet_db» без
+    значения, и агент без своей памяти искал базу заново. Ключ ищем как `scope/key`
+    или голым словом; голый — только если он не похож на обычное слово (есть «_»
+    или длина от 6), иначе `nodes` цеплялся бы к любому тексту про ноды.
+    """
+    if facts is None:
+        return ""
+    lines = []
+    for f in facts.all_live():
+        name = f"{f['scope']}/{f['key']}"
+        cited = re.search(rf"(?<!\w){re.escape(name)}(?!\w)", task) or (
+            ("_" in f["key"] or len(f["key"]) >= 6)
+            and re.search(rf"(?<![\w/]){re.escape(f['key'])}(?!\w)", task)
+        )
+        if cited:
+            lines.append(f"- `{name}` = {f['value']}")
+    if not lines:
+        return ""
+    return ("Факты из памяти, на которые ссылается поручение (уже проверены — "
+            "не добывай их заново):\n" + "\n".join(lines[:limit]))
+
+
 def _memory_index(facts: KnowledgeStore | None) -> str:
     """Оглавление памяти в промпт — области, ключи и «когда пригодится»; сами
     значения по запросу.
@@ -425,6 +450,8 @@ class Director(Agent):
             prompt = compose_prompt(role, chosen)
             if plan is not None:
                 prompt += "\n\n" + _steps_block({n: plan[n - 1] for n in steps})
+            if cited := _cited_facts(facts, task):
+                prompt += "\n\n" + cited
             sub = Agent(
                 name=f"spawned:{'+'.join(skills)}",
                 system_prompt=prompt,

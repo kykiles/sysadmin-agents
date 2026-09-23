@@ -693,3 +693,61 @@ async def test_spawn_result_reminds_to_remember_what_agent_found(tmp_path):
 def test_prompt_says_when_to_remember_before_warning():
     prompt = Director(llm=None, skills=_skill()).system_prompt
     assert prompt.index("Когда писать через remember_fact") < prompt.index("Разовые находки")
+
+
+async def _spawn_prompt(store: KnowledgeStore, task: str) -> str:
+    """Системный промпт агента, которого Директор спавнит с этим task."""
+    director_llm = FakeLLM([
+        _call("spawn", {"role": "аналитик", "skills": ["writer"], "task": task}),
+        ChoiceMessage(content="Готово.", tool_calls=None),
+    ])
+    agent_llm = FakeLLM([ChoiceMessage(content="сделал", tool_calls=None)])
+    d = Director(llm=director_llm, agent_llm=agent_llm, skills=_skill(), facts=store)
+    await d.handle(Task(content="задача"))
+    return agent_llm.seen[0][0]["content"]
+
+
+async def test_spawn_gives_agent_value_of_fact_named_in_task(tmp_path):
+    """Прод 23.09 (6918b8cf): Директор сослался на ключ без значения, и агент
+    искал базу заново — своей памяти у него нет."""
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("bot", "cabinet_db", "postgres в glowshine-postgres-1, база cabinet")
+    store.remember("docker", "compose_path", "/opt/app")
+
+    prompt = await _spawn_prompt(store, "База описана фактом cabinet_db, посчитай оплаты")
+
+    assert "`bot/cabinet_db` = postgres в glowshine-postgres-1, база cabinet" in prompt
+    assert "/opt/app" not in prompt
+
+
+async def test_spawn_finds_fact_by_scope_and_key(tmp_path):
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("docker", "compose_path", "/opt/app")
+    store.remember("other", "compose_path", "/srv/other")
+
+    prompt = await _spawn_prompt(store, "стек лежит по docker/compose_path, перезапусти")
+
+    assert "`docker/compose_path` = /opt/app" in prompt
+    assert "/srv/other" not in prompt
+
+
+async def test_spawn_without_fact_keys_keeps_prompt(tmp_path):
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("docker", "compose_path", "/opt/app")
+    # Короткий ключ без «_» не цепляется к слову в тексте, длинный — к части слова.
+    store.remember("vpn", "nodes", "de1, nl2")
+
+    prompt = await _spawn_prompt(store, "проверь nodes и compose_paths на сервере")
+
+    assert "Факты из памяти" not in prompt
+
+
+async def test_spawn_does_not_give_closed_fact_version(tmp_path):
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("bot", "cabinet_db", "старая база")
+    store.remember("bot", "cabinet_db", "новая база")
+
+    prompt = await _spawn_prompt(store, "посмотри cabinet_db")
+
+    assert "новая база" in prompt
+    assert "старая база" not in prompt
