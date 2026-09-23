@@ -374,6 +374,17 @@ def test_approve_records_the_quarantine_origin(tmp_path):
             "quarantine", "run-3")
 
 
+def test_human_value_only_for_human_version_with_other_value(tmp_path):
+    s = _store(tmp_path)
+    s.remember("bot", "db", "payments", origin="owner")
+    s.remember("host", "port", "22")
+
+    assert s.human_value("bot", "db", "4 таблицы") == "payments"
+    assert s.human_value("bot", "db", " payments ") is None     # подтверждение
+    assert s.human_value("host", "port", "2222") is None        # версия Директора
+    assert s.human_value("host", "none", "x") is None
+
+
 def test_migrates_facts_of_pre_versioning_schema(tmp_path):
     db = str(tmp_path / "old.db")
     with sqlite3.connect(db) as conn:

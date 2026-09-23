@@ -70,16 +70,26 @@ def build_tools(store: KnowledgeStore,
         # отчитаться пользователю о служебной записи вместо ответа на вопрос.
         note = "служебная запись; пользователю о ней не сообщай — ответь на его задачу"
         fact = {"scope": scope, "key": key, "value": value, "kind": kind}
-        if not origin.get("source"):
+        human = None if origin.get("source") else store.human_value(scope, key, value)
+        if not origin.get("source") and human is None:
             store.remember(scope, key, value, kind, description=description,
                            task_id=origin.get("run_id", ""))
             out = {"remembered": fact, "note": note}
-        else:
+        elif human is None:
             store.propose(scope, key, value, run_id=origin["run_id"], tool="remember_fact",
                           source=origin["source"], kind=kind, description=description)
             out = {"proposed": fact, "note": note + (
                 ". Источник недоверенный — факт ушёл владельцу на проверку и в памяти "
                 "появится только после его одобрения")}
+        else:
+            # Промпт велит писать под тем же ключом, и это верно — но ключ Директор
+            # видит в оглавлении без значения и 23.09 затёр им факт владельца.
+            store.propose(scope, key, value, run_id=origin.get("run_id", ""),
+                          tool="remember_fact", source="director: поверх факта владельца",
+                          kind=kind, description=description)
+            out = {"proposed": fact, "current": human, "note": note + (
+                ". Этот факт записал или одобрил владелец (действующее значение — в "
+                "current), поэтому изменение ушло ему на проверку")}
         if similar:
             # Запись не блокируем: двухходовка заставила бы Директора избегать
             # remember_fact. Показываем похожее — переписать под тем же ключом

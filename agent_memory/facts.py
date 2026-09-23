@@ -54,6 +54,11 @@ _FACTS_LIVE_INDEX = (
 KIND_LABELS = {"lesson": "урок", "negative_rule": "не делать"}
 KINDS = ("stable", "snapshot", *KIND_LABELS)
 
+# Версии, прошедшие через человека: записанная владельцем и одобренные им в /learn.
+# Директор видит в оглавлении только ключ и 23.09 затёр такой факт своей бедной
+# версией, так что поверх них его запись идёт владельцу на проверку.
+HUMAN_ORIGINS = ("owner", "consolidation", "quarantine")
+
 
 def _stems(text: str) -> set[str]:
     """Основы слов для similar: дефисы и точки делят слово, чтобы
@@ -159,6 +164,18 @@ class KnowledgeStore(SqliteStore):
                  task_id: str = "") -> None:
         with self._connect() as conn:
             self._write(conn, scope, key, value, kind, description, origin, task_id)
+
+    def human_value(self, scope: str, key: str, value: str) -> str | None:
+        """Значение действующей версии, если её дал человек, а `value` с ним
+        расходится. Совпадение — подтверждение, его в карантин не шлём."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value, origin FROM facts "
+                "WHERE scope = ? AND key = ? AND valid_until IS NULL", (scope, key)
+            ).fetchone()
+        if row is None or row[1] not in HUMAN_ORIGINS or _norm(row[0]) == _norm(value):
+            return None
+        return row[0]
 
     def propose(self, scope: str, key: str, value: str, *, run_id: str, tool: str,
                 source: str, kind: str = "stable", description: str = "") -> int:

@@ -288,6 +288,53 @@ async def test_fact_from_an_ordinary_task_is_active(tmp_path):
         assert conn.execute("SELECT origin, task_id FROM facts").fetchone() == ("director", "run-9")
 
 
+async def _remember_over(store: KnowledgeStore, value: str) -> dict:
+    llm = FakeLLM([
+        _call("remember_fact", {"scope": "bot", "key": "cabinet_db", "value": value}),
+        ChoiceMessage(content="готово", tool_calls=None),
+    ])
+    d = Director(llm=llm, skills=_skill(), facts=store)
+    await d.handle(Task(content="активность glowshine-app", run_id="run-11"))
+    return [json.loads(m["content"]) for m in llm.seen[-1] if m.get("role") == "tool"][-1]
+
+
+@pytest.mark.parametrize("origin", ["owner", "consolidation", "quarantine"])
+async def test_director_does_not_overwrite_human_fact(tmp_path, origin):
+    """23.09: Директор записал бедную версию bot/cabinet_db поверх версии владельца."""
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("bot", "cabinet_db", "схема payments, pg_read", origin=origin)
+
+    reply = await _remember_over(store, "контейнер, 4 таблицы")
+
+    assert store.recall(scope="bot")[0]["value"] == "схема payments, pg_read"
+    (p,) = store.proposals()
+    assert (p["value"], p["run_id"], p["current"]) == (
+        "контейнер, 4 таблицы", "run-11", "схема payments, pg_read")
+    assert "proposed" in reply and "remembered" not in reply
+    assert reply["current"] == "схема payments, pg_read"
+
+
+async def test_same_value_over_human_fact_confirms_it(tmp_path):
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("bot", "cabinet_db", "схема payments", origin="owner")
+
+    reply = await _remember_over(store, "схема  payments")
+
+    assert "remembered" in reply and store.proposals() == []
+    with store._connect() as conn:
+        assert conn.execute("SELECT confirmed, origin FROM facts").fetchall() == [(1, "owner")]
+
+
+async def test_director_fact_is_overwritten_as_before(tmp_path):
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("bot", "cabinet_db", "старое")
+
+    reply = await _remember_over(store, "новое")
+
+    assert "remembered" in reply and store.proposals() == []
+    assert store.recall(scope="bot")[0]["value"] == "новое"
+
+
 def test_memory_index_collapses_tail_when_budget_spent():
     """Оглавление не растёт вместе с базой: хвост схлопывается в одну строку."""
     from app.agents.director import _render_index
