@@ -174,16 +174,48 @@ def resource_files(skill: Skill) -> list[str]:
     )
 
 
-def load_all_skills(root: Path) -> dict[str, Skill]:
-    """Невалидный скил пропускается с записью в лог: скачанный чужой скил не должен
-    ронять запуск бота и write_skill."""
+def load_learned(skill_dir: Path) -> Skill:
+    """Выученный навык — ровно то, что пишет write_skill: SKILL.md с name и
+    description. Через metadata навык выдаёт доступ к хосту и подключает MCP, код и
+    scripts/ исполняются — это всё у навыков владельца, а каталог выученных пишет
+    процесс, который читает недоверенный текст."""
+    meta, body = parse_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
+    if problem := validate(meta, skill_dir.name):
+        raise ValueError(f"skill {skill_dir.name}: {problem}")
+    extra = ["metadata"] if "metadata" in meta else []
+    extra += [p for p in ("tools.py", *RESOURCE_DIRS) if (skill_dir / p).exists()]
+    if extra:
+        raise ValueError(f"skill {skill_dir.name}: выученный навык — только текст, "
+                         f"а здесь {', '.join(extra)}")
+    return Skill(name=meta["name"], description=meta["description"],
+                 instructions=body.strip(), tools=[], path=skill_dir)
+
+
+def _load_dir(root: Path, load: Callable[[Path], Skill]) -> dict[str, Skill]:
     skills: dict[str, Skill] = {}
+    if not root.is_dir():
+        return skills
     for d in sorted(root.iterdir()):
         if (d / "SKILL.md").exists():
             try:
-                skill = load_skill(d)
+                skill = load(d)
             except ValueError as e:
                 log.error("skill_invalid", skill=d.name, error=str(e))
                 continue
             skills[skill.name] = skill
+    return skills
+
+
+def load_all_skills(root: Path, learned: Path | None = None) -> dict[str, Skill]:
+    """Библиотека владельца (`root`) и выученные навыки (`learned`, их пишет
+    write_skill). Невалидный скил пропускается с записью в лог: скачанный чужой скил
+    не должен ронять запуск бота и write_skill. Имя из библиотеки выученный навык не
+    перекрывает — решение человека главнее."""
+    skills = _load_dir(root, load_skill)
+    if learned is not None:
+        for name, skill in _load_dir(learned, load_learned).items():
+            if name in skills:
+                log.warning("learned_skill_shadowed", skill=name)
+                continue
+            skills[name] = skill
     return skills

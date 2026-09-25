@@ -1,8 +1,10 @@
 import asyncio
 import json
 import re
+import shutil
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 from functools import reduce
 from operator import or_
 from pathlib import Path
@@ -90,6 +92,10 @@ _SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 # на всю его дальнейшую жизнь. Ручные скилы укладываются в 60 строк; просьбу в промпте
 # модель проигнорирует, предел механический.
 _SKILL_MAX_CHARS = 6000
+
+# Прежние версии выученных навыков: <learned_dir>/.history/<имя>/<время>.md. В этом
+# каталоге нет SKILL.md, и загрузчик его не читает.
+_HISTORY_DIR = ".history"
 
 _WRITE_SKILL_BLOCK = (
     "\n\nПроцедурная память: если задача решена нетривиальной последовательностью, "
@@ -339,9 +345,13 @@ class Director(Agent):
     def __init__(self, llm: LLMClient, gateway=None,
                  memory=None, journal=None, skills: dict | None = None,
                  skills_dir: Path | None = None, agent_llm: LLMClient | None = None,
-                 progress=None, facts: KnowledgeStore | None = None):
+                 progress=None, facts: KnowledgeStore | None = None,
+                 learned_dir: Path | None = None):
         # Модель временных агентов; без неё они работают на модели Директора.
         agent_llm = agent_llm or llm
+        # skills_dir — библиотека владельца (в образе, под git), learned_dir — куда
+        # пишет write_skill (том): без тома пересборка образа стирала всё выученное.
+        can_write_skill = skills_dir is not None and learned_dir is not None
 
         async def _make_report(title: str, markdown: str) -> dict:
             path = await asyncio.to_thread(
@@ -484,6 +494,18 @@ class Director(Agent):
                     "note": "если агент добыл устойчивое (контейнер, путь, схему), чего нет "
                             "в оглавлении памяти, — запиши remember_fact до ответа"}
 
+        def _owned_by_library(name: str) -> str | None:
+            """Граница простая: плейбуки пишет модель, код и библиотеку — человек. Скил
+            с tools.py несёт права доступа к хосту, и переписать его инструкции —
+            значит переписать ограничения, под которыми их выдали; плейбук без кода в
+            библиотеке — решение владельца, лежащее в git."""
+            lib = skills_dir / name
+            if (lib / "tools.py").exists():
+                return f"навык {name} содержит код — его плейбук правит человек"
+            if (lib / "SKILL.md").exists():
+                return f"навык {name} — из библиотеки владельца: его плейбук правит человек"
+            return None
+
         async def _write_skill(name: str, description: str, instructions: str,
                                overwrite: bool = False) -> dict:
             if not (3 <= len(name) <= 64 and _SKILL_NAME.fullmatch(name)):
@@ -492,24 +514,28 @@ class Director(Agent):
                 return {"error": "description: одна строка до 1024 символов"}
             if len(instructions) > _SKILL_MAX_CHARS:
                 return {"error": f"плейбук длиннее {_SKILL_MAX_CHARS} символов — сократи до сути"}
-            d = skills_dir / name
-            # Граница простая: плейбуки пишет модель, код пишет человек. Скил с
-            # tools.py несёт права доступа к хосту, и переписать его инструкции —
-            # значит переписать ограничения, под которыми их выдали.
-            if (d / "tools.py").exists():
-                return {"error": f"навык {name} содержит код — его плейбук правит человек"}
+            if problem := _owned_by_library(name):
+                return {"error": problem}
             meta = yaml.safe_dump(
                 {"name": name, "description": description},
                 allow_unicode=True, sort_keys=False,
             )
             body = f"---\n{meta}---\n\n{instructions.strip()}\n"
+            md = learned_dir / name / "SKILL.md"
 
             def _save() -> None:
-                d.mkdir(parents=True, exist_ok=True)
-                (d / "SKILL.md").write_text(body, encoding="utf-8")
+                if md.exists():
+                    # Заменяемая версия уходит в историю: у фактов «было → стало»
+                    # есть (ADR 0007), а overwrite плейбука стирал шаги и грабли без следа.
+                    history = learned_dir / _HISTORY_DIR / name
+                    history.mkdir(parents=True, exist_ok=True)
+                    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                    shutil.copy2(md, history / f"{stamp}.md")
+                md.parent.mkdir(parents=True, exist_ok=True)
+                md.write_text(body, encoding="utf-8")
 
             await asyncio.to_thread(_save)
-            self.reload_library(await asyncio.to_thread(load_all_skills, skills_dir))
+            self.reload_library(await asyncio.to_thread(load_all_skills, skills_dir, learned_dir))
             log.info("write_skill", skill=name)
             return {"saved": name, "note": "навык доступен для spawn сразу"}
 
@@ -519,10 +545,9 @@ class Director(Agent):
             плейбук — сведёт старое с новым и позовёт снова с overwrite."""
             if not _SKILL_NAME.fullmatch(args["name"]):
                 return None  # имя отклонит сам _write_skill — путь из него не строим
-            d = skills_dir / args["name"]
-            if (d / "tools.py").exists():
-                return f"навык {args['name']} содержит код — его плейбук правит человек"
-            md = d / "SKILL.md"
+            if problem := _owned_by_library(args["name"]):
+                return problem
+            md = learned_dir / args["name"] / "SKILL.md"
             if args["overwrite"] or not md.exists():
                 return None
             current = await asyncio.to_thread(md.read_text, encoding="utf-8")
@@ -569,7 +594,7 @@ class Director(Agent):
                 fn=_plan,
                 safety=Safety.SAFE,
             ))
-        if skills_dir is not None:
+        if can_write_skill:
             tools.append(Tool(
                 name="write_skill",
                 description=(
@@ -601,7 +626,7 @@ class Director(Agent):
             system_prompt=build_director_prompt(
                 {n: s.description for n, s in library.items()},
                 with_experience=journal is not None,
-                with_write_skill=skills_dir is not None,
+                with_write_skill=can_write_skill,
                 with_plan=progress is not None,
             ),
             tools=tools,
@@ -611,7 +636,7 @@ class Director(Agent):
         )
         self._library = library
         self._facts = facts
-        self._skills_dir = skills_dir
+        self._can_write_skill = can_write_skill
         self._base_prompt = self.system_prompt
         self._journal = journal
         self._progress = progress
@@ -642,7 +667,7 @@ class Director(Agent):
         self._base_prompt = build_director_prompt(
             {n: s.description for n, s in self._library.items()},
             with_experience=self._journal is not None,
-            with_write_skill=self._skills_dir is not None,
+            with_write_skill=self._can_write_skill,
             with_plan=self._progress is not None,
         )
 

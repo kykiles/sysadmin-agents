@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Своя база модуля памяти: факты, карантин, журнал задач, транскрипты, lint_seen.
     # История диалога памятью не считается (ADR 0006) и остаётся в dialog.db.
     memory_db_path: str = Field(default="/data/memory.db", alias="MEMORY_DB_PATH")
+    # Плейбуки, которые пишет write_skill, — на томе: в каталоге образа их стирала
+    # каждая пересборка. Библиотека владельца остаётся в skills/ рядом с кодом.
+    learned_skills_dir: str = Field(default="/data/skills", alias="LEARNED_SKILLS_DIR")
     dialog_history_limit: int = Field(default=20, alias="DIALOG_HISTORY_LIMIT")
     dialog_history_token_budget: int = Field(default=4000, alias="DIALOG_HISTORY_TOKEN_BUDGET")
     dialog_retention_days: int = Field(default=90, alias="DIALOG_RETENTION_DAYS")

@@ -40,8 +40,9 @@ async def main() -> None:
     # Библиотека скилов лежит рядом с пакетом, а не внутри него: ядро не знает,
     # из какой предметной области будут задачи.
     skills_dir = Path(__file__).resolve().parent.parent / "skills"
+    learned_dir = Path(settings.learned_skills_dir)
     facts = KnowledgeStore(settings.memory_db_path)
-    skills = load_all_skills(skills_dir)
+    skills = load_all_skills(skills_dir, learned_dir)
     history = DialogHistory(
         db_path=settings.dialog_db_path,
         limit=settings.dialog_history_limit,
@@ -62,7 +63,7 @@ async def main() -> None:
     gateway = TelegramConfirmationGateway(bot, chat_id=settings.telegram_user_id, progress=progress)
     director = Director(llm=director_llm, agent_llm=llm, gateway=gateway, memory=history,
                         journal=journal, skills=skills, skills_dir=skills_dir,
-                        progress=progress, facts=facts)
+                        learned_dir=learned_dir, progress=progress, facts=facts)
 
     await set_bot_commands(bot)
     dp = create_dispatcher(director=director, gateway=gateway, memory=history,

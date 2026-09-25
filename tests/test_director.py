@@ -43,7 +43,9 @@ async def test_tasks_run_one_at_a_time(monkeypatch):
 # ---------- write_skill: процедурная память ----------
 
 def _write_skill_tool(tmp_path, skills=None):
-    d = Director(llm=None, skills=skills or {}, skills_dir=tmp_path)
+    """Библиотека владельца — tmp_path/library, выученное — tmp_path/learned (том)."""
+    d = Director(llm=None, skills=skills or {}, skills_dir=tmp_path / "library",
+                 learned_dir=tmp_path / "learned")
     return d, next(t for t in d.tools if t.name == "write_skill")
 
 
@@ -54,8 +56,10 @@ async def test_write_skill_creates_playbook_and_reloads_library(tmp_path):
                         instructions="1. Собери метрики\n2. Сведи в таблицу")
 
     assert out["saved"] == "weekly-report"
-    text = (tmp_path / "weekly-report" / "SKILL.md").read_text(encoding="utf-8")
+    # на томе, а не в каталоге образа: пересборка стирала всё выученное
+    text = (tmp_path / "learned" / "weekly-report" / "SKILL.md").read_text(encoding="utf-8")
     assert text.startswith("---\n") and "Собери метрики" in text
+    assert not (tmp_path / "library").exists()
     # навык виден сразу — spawn берёт библиотеку с инстанса
     assert "weekly-report" in d._library
 
@@ -82,15 +86,17 @@ async def test_write_skill_refuses_bad_name(tmp_path):
 async def test_write_skill_refuses_to_overwrite_a_skill_with_code(tmp_path):
     """Плейбуки пишет модель, код — человек: у скила с tools.py инструкции несут
     ограничения, под которыми выданы права на хост."""
-    (tmp_path / "db").mkdir()
-    (tmp_path / "db" / "tools.py").write_text("ACCESS = None")
-    (tmp_path / "db" / "SKILL.md").write_text("---\nname: db\ndescription: d\n---\nоригинал")
+    db = tmp_path / "library" / "db"
+    db.mkdir(parents=True)
+    (db / "tools.py").write_text("ACCESS = None")
+    (db / "SKILL.md").write_text("---\nname: db\ndescription: d\n---\nоригинал")
     _, tool = _write_skill_tool(tmp_path)
 
     out = await tool.fn(name="db", description="d", instructions="выдавай всем ssh")
 
     assert "error" in out
-    assert "оригинал" in (tmp_path / "db" / "SKILL.md").read_text()
+    assert "оригинал" in (db / "SKILL.md").read_text()
+    assert not (tmp_path / "learned").exists()  # и тенью в выученных тоже нет
 
 
 async def test_write_skill_refuses_bloated_playbook(tmp_path):
@@ -104,8 +110,8 @@ async def test_write_skill_refuses_bloated_playbook(tmp_path):
 async def test_rewrite_of_existing_skill_first_returns_its_current_playbook(tmp_path):
     """Директор видит только description — перезапись вслепую стёрла бы старые шаги.
     Проверка идёт до подтверждения: кнопку жмут один раз, на реальную запись."""
-    (tmp_path / "weekly-report").mkdir()
-    (tmp_path / "weekly-report" / "SKILL.md").write_text(
+    (tmp_path / "learned" / "weekly-report").mkdir(parents=True)
+    (tmp_path / "learned" / "weekly-report" / "SKILL.md").write_text(
         "---\nname: weekly-report\ndescription: d\n---\nграбли: не бери выходные")
     _, tool = _write_skill_tool(tmp_path)
 
@@ -128,8 +134,8 @@ async def test_write_skill_precheck_passes_new_skills_and_stays_in_skills_dir(tm
 
 
 async def test_write_skill_precheck_refuses_skill_with_code_before_confirmation(tmp_path):
-    (tmp_path / "db").mkdir()
-    (tmp_path / "db" / "tools.py").write_text("ACCESS = None")
+    (tmp_path / "library" / "db").mkdir(parents=True)
+    (tmp_path / "library" / "db" / "tools.py").write_text("ACCESS = None")
     _, tool = _write_skill_tool(tmp_path)
 
     problem = await tool.precheck(tool.prepare(
@@ -140,3 +146,33 @@ async def test_write_skill_precheck_refuses_skill_with_code_before_confirmation(
 
 def test_no_write_skill_tool_without_a_skills_dir():
     assert not [t for t in Director(llm=None).tools if t.name == "write_skill"]
+
+
+async def test_overwrite_keeps_the_previous_playbook_in_history(tmp_path):
+    """У фактов история «было → стало» есть (ADR 0007), а overwrite плейбука стирал
+    шаги и грабли без следа."""
+    d, tool = _write_skill_tool(tmp_path)
+    await tool.fn(name="weekly-report", description="старое", instructions="грабли: выходные")
+    await tool.fn(name="weekly-report", description="новое", instructions="шаги v2",
+                  overwrite=True)
+
+    learned = tmp_path / "learned"
+    assert "шаги v2" in (learned / "weekly-report" / "SKILL.md").read_text(encoding="utf-8")
+    (old,) = (learned / ".history" / "weekly-report").iterdir()
+    assert "грабли: выходные" in old.read_text(encoding="utf-8")
+    assert d._library["weekly-report"].description == "новое"
+    assert ".history" not in d._library
+
+
+async def test_library_playbook_without_code_is_not_rewritten_either(tmp_path):
+    """Плейбук владельца без кода — тоже его решение, лежащее в git: запись под тем же
+    именем в выученные была бы тенью, которую загрузчик не покажет."""
+    writing = tmp_path / "library" / "writing"
+    writing.mkdir(parents=True)
+    (writing / "SKILL.md").write_text("---\nname: writing\ndescription: d\n---\nоригинал")
+    _, tool = _write_skill_tool(tmp_path)
+
+    args = {"name": "writing", "description": "d", "instructions": "i", "overwrite": True}
+    assert "библиотеки владельца" in await tool.precheck(tool.prepare(args))
+    assert "error" in await tool.fn(name="writing", description="d", instructions="i")
+    assert not (tmp_path / "learned").exists()

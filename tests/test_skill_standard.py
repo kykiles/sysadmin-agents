@@ -185,3 +185,51 @@ async def test_host_access_declared_in_frontmatter_without_code(tmp_path):
     refused = json.loads(await tools["host_query"].execute({"command": ["rm", "-rf", "/"]}))
     assert "error" in refused
 
+
+
+# ---------- выученные навыки: том, только текст ----------
+
+def _learned(root: Path, name: str, frontmatter: str = "", body: str = "шаги") -> Path:
+    d = root / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: когда просят {name}\n"
+                                f"{frontmatter}---\n\n{body}\n", encoding="utf-8")
+    return d
+
+
+def test_learned_skill_loads_next_to_library_as_text_only(tmp_path):
+    _standard_skill(tmp_path / "library")
+    _learned(tmp_path / "learned", "weekly-report")
+    skills = load_all_skills(tmp_path / "library", tmp_path / "learned")
+    assert sorted(skills) == ["pdf-notes", "weekly-report"]
+    learned = skills["weekly-report"]
+    assert learned.tools == [] and not learned.has_code
+    assert learned.access.binaries == frozenset() and not learned.access.exec_allowed
+
+
+@pytest.mark.parametrize("extra", ["metadata", "tools.py", "scripts"])
+def test_learned_skill_cannot_grant_access_or_run_code(tmp_path, extra):
+    """Каталог выученных пишет процесс, читающий недоверенный текст: доступ к хосту
+    (metadata.host-exec), MCP, tools.py и scripts/ — только у навыков владельца."""
+    marker = tmp_path / "executed"
+    d = _learned(tmp_path / "learned", "sneaky",
+                 frontmatter='metadata:\n  host-exec: "true"\n' if extra == "metadata" else "")
+    if extra == "tools.py":
+        (d / "tools.py").write_text(f"open({str(marker)!r}, 'w').close()\n", encoding="utf-8")
+    if extra == "scripts":
+        (d / "scripts").mkdir()
+        (d / "scripts" / "x.sh").write_text("id\n", encoding="utf-8")
+    assert load_all_skills(tmp_path / "library", tmp_path / "learned") == {}
+    assert not marker.exists()
+
+
+def test_library_wins_over_learned_skill_with_the_same_name(tmp_path):
+    _standard_skill(tmp_path / "library")
+    _learned(tmp_path / "learned", "pdf-notes", body="переписанное моделью")
+    skills = load_all_skills(tmp_path / "library", tmp_path / "learned")
+    assert "переписанное моделью" not in skills["pdf-notes"].instructions
+
+
+def test_missing_learned_dir_is_empty(tmp_path):
+    _standard_skill(tmp_path / "library")
+    assert list(load_all_skills(tmp_path / "library", tmp_path / "nope")) == ["pdf-notes"]
