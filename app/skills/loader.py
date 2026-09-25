@@ -46,10 +46,17 @@ class Skill:
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Любая порча фронтматтера — ValueError: yaml бросает своё YAMLError, и навык
+    с битым YAML ронял load_all_skills, а на старте — весь бот циклом рестартов."""
     if not text.startswith("---"):
         return {}, text
-    _, fm, body = text.split("---", 2)
-    meta = yaml.safe_load(fm) or {}
+    try:
+        _, fm, body = text.split("---", 2)
+        meta = yaml.safe_load(fm) or {}
+    except (ValueError, yaml.YAMLError) as e:
+        raise ValueError(f"фронтматтер не разобран: {e}") from e
+    if not isinstance(meta, dict):
+        raise ValueError("фронтматтер — не набор полей «имя: значение»")
     return meta, body
 
 

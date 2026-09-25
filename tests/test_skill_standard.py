@@ -68,6 +68,18 @@ def test_invalid_skill_is_skipped_not_fatal(tmp_path):
     assert list(load_all_skills(tmp_path)) == ["pdf-notes"]
 
 
+@pytest.mark.parametrize("frontmatter", [
+    "name: bad\ndescription: [незакрытая\n",  # yaml.YAMLError, а не ValueError
+    "- name\n- bad\n",                          # YAML цел, но это список, а не поля
+])
+def test_broken_frontmatter_is_skipped_not_fatal(tmp_path, frontmatter):
+    _standard_skill(tmp_path)
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / "SKILL.md").write_text(f"---\n{frontmatter}---\n", encoding="utf-8")
+    assert list(load_all_skills(tmp_path)) == ["pdf-notes"]
+
+
 def test_standard_skill_loads_as_playbook_with_resources(tmp_path):
     skill = load_skill(_standard_skill(tmp_path))
     assert skill.tools == [] and not skill.has_code
