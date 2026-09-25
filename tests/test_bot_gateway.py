@@ -168,9 +168,9 @@ async def test_undelivered_file_means_no_buttons_and_rejection():
 
 # ---------- «Yes to all»: тот же инструмент и цель, до конца ответа ----------
 
-def _run_req(run="r1", tool="docker_query", **args):
+def _run_req(run="r1", tool="ssh_exec", **args):
     return ConfirmationRequest(run_id=run, agent_id="a#1", tool_call_id="c1", tool_name=tool,
-                               args=args or {"container": "pg", "command": ["psql", "-c", "SELECT 1"]})
+                               args=args or {"host": "node-a", "command": ["systemctl", "restart", "nginx"]})
 
 
 async def test_yes_to_all_approves_same_scope_without_asking():
@@ -179,16 +179,17 @@ async def test_yes_to_all_approves_same_scope_without_asking():
     task, rid = await _start(gw, _run_req())
     assert _owner(gw, rid, Decision.APPROVED_ALL)
     assert await task is Decision.APPROVED_ALL
-    other_query = _run_req(container="pg", command=["psql", "-c", "SELECT 2"])
-    assert await gw.request(other_query) is Decision.AUTO_APPROVED
+    other_unit = _run_req(host="node-a", command=["systemctl", "restart", "xray"])
+    assert await gw.request(other_unit) is Decision.AUTO_APPROVED
     assert bot.send_message.await_count == 1
-    assert "container=pg, program=psql" in bot.send_message.call_args.args[1]
+    assert "host=node-a, program=systemctl restart" in bot.send_message.call_args.args[1]
 
 
 @pytest.mark.parametrize("other", [
-    _run_req(container="other", command=["psql", "-c", "SELECT 1"]),
-    _run_req(container="pg", command=["mysql", "-e", "SELECT 1"]),
-    _run_req(tool="docker_exec", container="pg", command=["psql", "-c", "SELECT 1"]),
+    _run_req(host="node-b", command=["systemctl", "restart", "nginx"]),
+    _run_req(host="node-a", command=["systemctl", "stop", "nginx"]),
+    _run_req(host="node-a", command=["certbot", "renew"]),
+    _run_req(tool="shell_exec", command=["systemctl", "restart", "nginx"]),
     _run_req(run="r2"),
 ])
 async def test_yes_to_all_does_not_cover_other_target_program_tool_or_run(other):
@@ -216,6 +217,9 @@ async def test_release_ends_yes_to_all():
     _run_req(tool="write_skill", name="x", description="d", instructions="i"),
     _run_req(tool="docker_exec", container="pg", command=["sh", "-c", "rm -rf /data"]),
     _run_req(tool="shell_exec", command=["/usr/bin/bash", "-lc", "id"]),
+    # смысл задают аргументы: «для всех» было бы разрешением на любой SQL и любой rm
+    _run_req(tool="docker_query", container="pg", command=["psql", "-c", "SELECT 1"]),
+    _run_req(tool="shell_exec", command=["rm", "/tmp/old.log"]),
 ])
 async def test_no_yes_to_all_without_recognisable_scope(req):
     bot = _bot()

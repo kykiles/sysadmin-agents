@@ -3,6 +3,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from app.llm.client import Usage
+from app.skills.readonly import KNOWN_BINARIES, is_read_only
 
 
 class Decision(str, Enum):
@@ -47,14 +48,25 @@ class Result(BaseModel):
 
 # Аргументы, которые называют цель вызова: сервер, контейнер, проект, сайт, скрипт.
 _SCOPE_KEYS = ("host", "container", "project", "site", "skill", "script")
-_OPAQUE_PROGRAMS = {
-    "sh", "bash", "dash", "ash", "zsh", "env", "sudo", "su", "nsenter", "busybox",
-    "python", "python3", "perl", "node", "xargs", "timeout", "nohup", "ssh",
+# У команды «Да, для всех таких» разрешает программу вместе с подкомандой, и только
+# у программ, где подкоманда сама говорит, что будет сделано. У остальных смысл
+# задают аргументы, и разрешение на программу было разрешением на что угодно:
+# одобренный «для всех» `rm /tmp/old.log` пропускал `rm -rf /var/lib/postgresql`,
+# `systemctl reload nginx` — `systemctl disable --now ssh`, `curl -sI …` —
+# `curl -d @.env …`, `psql -c "select 1"` — любой SQL. Оболочки, `iptables`,
+# клиенты БД — всё не из списка — подтверждаются каждый раз.
+_VERB_PROGRAMS = {"systemctl", "certbot"}
+# docker — не одна программа: `restart` и `exec` разрешать вместе нельзя. В группах
+# (`docker volume rm`, `docker system prune`) подкоманда — следующее слово: иначе
+# `docker volume ls` разрешал бы `docker volume rm`. Опасные подкоманды исполняют
+# что угодно (внутри контейнера или с томом `/:/host`) или пишут и отправляют куда
+# угодно (`cp` в файлы хоста, `push` в чужой реестр).
+_DOCKER_GROUPS = {
+    "builder", "buildx", "compose", "config", "container", "context", "image", "manifest",
+    "network", "node", "plugin", "secret", "service", "stack", "swarm", "system", "trust",
+    "volume",
 }
-# docker — не одна программа: `restart` и `exec` разрешать вместе нельзя. Эти
-# подкоманды исполняют что угодно (внутри контейнера или с томом `/:/host`).
-_DOCKER_GROUPS = {"compose", "container"}
-_DOCKER_OPAQUE = {"exec", "run", "create"}
+_DOCKER_OPAQUE = {"exec", "run", "create", "cp", "push"}
 
 
 def _docker_program(args: list) -> str | None:
@@ -62,11 +74,34 @@ def _docker_program(args: list) -> str | None:
     или скрыта за опциями (`docker --context x exec`): её не разбираем, кнопки нет."""
     words = ["docker"]
     for arg in args:
-        if not isinstance(arg, str) or arg.startswith("-"):
+        if arg.startswith("-"):
             return None
         words.append(arg)
         if arg not in _DOCKER_GROUPS:
             return None if arg in _DOCKER_OPAQUE else " ".join(words)
+    return None
+
+
+def _command_scope(command: list[str]) -> str | None:
+    """Часть scope про команду; None — кнопки нет."""
+    # Путь вместо имени — чужой бинарник под знакомым именем: `/tmp/x/docker restart`.
+    if "/" in command[0]:
+        return None
+    name, args = command[0], command[1:]
+    if name == "docker":
+        program = _docker_program(args)
+    elif name in _VERB_PROGRAMS and args and not any(a.startswith("-") for a in args):
+        # Без опций: `certbot renew --post-hook …` исполняет что угодно, такой вызов
+        # человек подтверждает отдельно.
+        program = f"{name} {args[0]}"
+    else:
+        program = None
+    if program is not None:
+        return f"program={program}"
+    # Читающая команда — по тому же классификатору, что у host_query: разрешение
+    # дойдёт только до вызовов, которые он тоже признает читающими.
+    if is_read_only(command, KNOWN_BINARIES):
+        return f"program={name}, только чтение"
     return None
 
 
@@ -84,19 +119,17 @@ class ConfirmationRequest(BaseModel):
     reason: str = ""
 
     def scope(self) -> str | None:
-        """Что разрешает «Yes to all»: инструмент, цель и программа — как префикс
-        команды в Claude Code. None — узнаваемой цели нет (MCP, write_skill, сырой
-        HTTP), и одним нажатием разрешилось бы что угодно: кнопку не предлагаем."""
+        """Что разрешает «Yes to all»: инструмент, цель и программа с подкомандой — как
+        префикс команды в Claude Code. None — кнопку не предлагаем: узнаваемой цели
+        нет (MCP, write_skill, сырой HTTP) или смысл команды задают её аргументы, и
+        одним нажатием разрешилось бы что угодно."""
         parts = [f"{k}={self.args[k]}" for k in _SCOPE_KEYS if isinstance(self.args.get(k), str)]
         command = self.args.get("command")
-        if isinstance(command, list) and command and isinstance(command[0], str):
-            # По имени оболочки не видно, что она исполнит: разрешить `sh` навсегда —
-            # разрешить любой скрипт.
-            name = command[0].rsplit("/", 1)[-1]
-            if name in _OPAQUE_PROGRAMS:
+        if isinstance(command, list) and command:
+            if not all(isinstance(a, str) for a in command):
                 return None
-            program = _docker_program(command[1:]) if name == "docker" else command[0]
+            program = _command_scope(command)
             if program is None:
                 return None
-            parts.append(f"program={program}")
+            parts.append(program)
         return f"{self.tool_name}: {', '.join(parts)}" if parts else None
