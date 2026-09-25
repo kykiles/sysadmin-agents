@@ -24,6 +24,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
+from app.skills.network import is_allowed
 from app.tools.base import Tool, Safety
 from app.tools.docker import ShellParams, host_exec
 
@@ -426,6 +427,20 @@ _GIT = Argv(
     },
 )
 
+# getent — только базы без секретов: `getent shadow` отдавал хэши паролей в обход
+# проверки файлов. hosts и ahosts* — DNS-запрос, то есть выход в сеть: ключи — только
+# хосты из NETWORK_ALLOWED (см. network.py); без ключа hosts перечисляет /etc/hosts.
+_GETENT_LOCAL = frozenset({"passwd", "group", "services", "protocols"})
+_GETENT_DNS = frozenset({"hosts", "ahosts", "ahostsv4", "ahostsv6"})
+
+
+def _getent(ps: list[str]) -> bool:
+    if not ps:
+        return False
+    return ps[0] in _GETENT_LOCAL or (
+        ps[0] in _GETENT_DNS and all(is_allowed(key) for key in ps[1:]))
+
+
 _SPECS: dict[str, Argv] = {
     # состояние системы
     "df": Argv(flags=_opts("-h", "-H", "-T", "-i", "-a", "-l", "-P", "-k",
@@ -520,7 +535,7 @@ _SPECS: dict[str, Argv] = {
                        "--socket": _word},
                positional=_paths),  # выражение фильтра: state established '( dport = :443 )'
     "getent": Argv(flags=_opts("-i", "--no-idn"), valued={"-s": _word, "--service": _word},
-                   positional=lambda ps: bool(ps)),
+                   positional=_getent),
     # -C/-S очищают и выставляют записи
     "lastlog": Argv(valued={"-u": _word, "--user": _word, "-b": _INT, "--before": _INT,
                             "-t": _INT, "--time": _INT}),
@@ -659,6 +674,17 @@ _ELSEWHERE = {
         "Конфиги обычно примонтированы с ноды — путь можно взять из её compose-файла "
         "и прочитать обычным `cat`.",
     ),
+    **{("getent", db): (
+        "резолв имени — DNS-запрос наружу: без подтверждения только для хостов из "
+        "NETWORK_ALLOWED. Хост свой — shell_exec с подтверждением, а постоянно — пусть "
+        "владелец добавит его в NETWORK_ALLOWED.",
+        "резолв имени — DNS-запрос наружу: без подтверждения только для хостов из "
+        "NETWORK_ALLOWED. Хост свой — ssh_exec с подтверждением.",
+    ) for db in _GETENT_DNS},
+    **{("getent", db): (
+        "это хэши паролей — только через shell_exec с подтверждением.",
+        "это хэши паролей — только через ssh_exec с подтверждением.",
+    ) for db in ("shadow", "gshadow")},
 }
 
 

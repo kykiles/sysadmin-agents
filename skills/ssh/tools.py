@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from skills.host.tools import ACCESS as _HOST_ACCESS
+from app.skills.network import is_allowed, refusal_reason
 from app.skills.readonly import HostAccess, is_read_only, refusal
 from app.tools.base import Tool, Safety
 from app.tools.docker import shell_exec
@@ -52,6 +53,11 @@ def _ssh_argv(host: str, command: list[str]) -> list[str]:
 
 
 async def ssh_query(host: str, command: list[str], binaries: frozenset[str]) -> dict:
+    # Чужой хост получил бы сам текст команды, а его имя ушло бы DNS-запросом —
+    # без подтверждения подключаемся только к хостам владельца.
+    if not is_allowed(host.rpartition("@")[2]):
+        return {"host": host, "command": command,
+                "error": refusal_reason(host, "ssh_exec с подтверждением")}
     if not is_read_only(command, binaries):
         # Отказ теперь бывает двух видов: команда меняет состояние либо её бинарника
         # нет в скоупе этого агента. Перечисляем скоуп, чтобы он не эскалировал

@@ -73,6 +73,7 @@ cp .env.example .env
 | `DIALOG_HISTORY_LIMIT` | `20` | Сколько последних реплик Директор помнит |
 | `MEMORY_DB_PATH` | `/data/memory.db` | Своя база памяти: факты, карантин и журнал задач — из него Директор вспоминает прошлый опыт, по нему работают `/learn` и `/trace`. Старые `dialog.db` и `tasks.db` переливаются сюда при первом старте |
 | `DEPLOY_ALLOWED` | (пусто) | Сайты под `/opt`, разрешённые для деплоя (через запятую); пустой = деплой запрещён |
+| `NETWORK_ALLOWED` | (пусто) | Хосты, с которыми читающие инструменты (`ssh_query`, `tls_check`, `getent hosts`) связываются без подтверждения: имена, IP и `.домен` (домен с поддоменами) через запятую. `MONITOR_TLS_ENDPOINTS` и хост `REMNAWAVE_BASE_URL` входят сами. К остальным — только через `ssh_exec`/`shell_exec` с подтверждением. **Впишите сюда свои ноды**, иначе каждая команда на них пойдёт через кнопку |
 | `SSH_KEY_PATH`, `SSH_USER` | `/data/ssh/id_ed25519`, `root` | Доступ навыка `ssh` к нодам |
 | `REMNAWAVE_BASE_URL`, `REMNAWAVE_API_KEY` | (пусто) | Панель Remnawave для навыка `remnawave` |
 | `MONITOR_ENABLED` | `false` | Фоновый мониторинг; пороги — `MONITOR_*` в `app/config.py` |

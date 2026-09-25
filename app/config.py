@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     journal_enabled: bool = Field(default=True, alias="JOURNAL_ENABLED")
     journal_transcripts: int = Field(default=20, alias="JOURNAL_TRANSCRIPTS")
     deploy_allowed: str = Field(default="", alias="DEPLOY_ALLOWED")
+    # Хосты, с которыми читающие инструменты (ssh_query, tls_check, getent hosts)
+    # связываются без подтверждения: имена, IP и `.домен` — домен с поддоменами.
+    # MONITOR_TLS_ENDPOINTS и хост REMNAWAVE_BASE_URL входят сами. Остальное —
+    # через ssh_exec/shell_exec с подтверждением (см. app/skills/network.py).
+    network_allowed: str = Field(default="", alias="NETWORK_ALLOWED")
     remnawave_base_url: str = Field(default="", alias="REMNAWAVE_BASE_URL")
     remnawave_api_key: str = Field(default="", alias="REMNAWAVE_API_KEY")
     remnawave_timeout: int = Field(default=30, alias="REMNAWAVE_TIMEOUT")

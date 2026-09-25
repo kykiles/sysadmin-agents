@@ -4,6 +4,7 @@ import shlex
 
 from pydantic import BaseModel, Field
 
+from app.skills.network import is_allowed, refusal_reason
 from app.skills.readonly import HostAccess
 from app.tools.base import Tool, Safety
 from app.tools.docker import host_shell
@@ -26,6 +27,12 @@ async def tls_check(endpoint: str) -> dict:
     if not _ENDPOINT_RE.match(endpoint):
         return {"endpoint": endpoint, "error": "ожидается host:port, например example.com:443"}
     host, _, port = endpoint.rpartition(":")
+    # SAFE-вызов с выходом в сеть: имя чужого хоста само по себе выносит данные
+    # DNS-запросом, поэтому без подтверждения — только хосты владельца.
+    if not is_allowed(host):
+        return {"endpoint": endpoint, "error": refusal_reason(
+            host, "проверь через shell_exec с подтверждением, если он выдан, иначе скажи "
+                  "об этом в ответе")}
     q = shlex.quote(endpoint)
     servername = shlex.quote(host)
     script = (

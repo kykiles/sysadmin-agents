@@ -13,6 +13,9 @@ async def test_tls_check_validates_endpoint():
 
 async def test_tls_check_builds_openssl(monkeypatch):
     import skills.security.tools as st
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "network_allowed", "example.com")
     captured = {}
 
     async def fake_host_shell(script):

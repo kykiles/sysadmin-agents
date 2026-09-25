@@ -3,10 +3,17 @@ from unittest import mock
 import pytest
 
 from skills.ssh.tools import _node_binaries, _ssh_argv, ssh_query, build_access_tools
+from app.config import settings
 from app.skills.readonly import HostAccess, is_read_only
 from app.tools.base import Safety
 
 _BASE = _node_binaries(HostAccess())
+
+
+@pytest.fixture(autouse=True)
+def _owner_nodes(monkeypatch):
+    """Ноды из этих тестов — свои: ssh_query ходит только к NETWORK_ALLOWED."""
+    monkeypatch.setattr(settings, "network_allowed", "10.0.0.1,1.2.3.4,node.example,node-1")
 
 
 def _is_read_only(command, binaries=_BASE):
