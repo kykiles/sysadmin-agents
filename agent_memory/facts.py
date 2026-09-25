@@ -5,6 +5,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from agent_memory.store import SqliteStore
+from agent_memory.text import fold, stem
 
 # Колонки facts отдельно от CREATE: тем же списком пересобирается таблица старой
 # схемы в _migrate — SQLite не умеет менять первичный ключ на месте.
@@ -72,6 +73,21 @@ def _norm(value: str) -> str:
     return " ".join(value.split())
 
 
+def _fold_sql(value):
+    return fold(value) if isinstance(value, str) else value
+
+
+def age_days(ts: str, now: datetime | None = None) -> int | None:
+    """Сколько полных дней прошло с `ts` (ISO); None — метка не разбирается."""
+    try:
+        stored = datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return None
+    if stored.tzinfo is None:
+        stored = stored.replace(tzinfo=timezone.utc)
+    return ((now or datetime.now(timezone.utc)) - stored).days
+
+
 class KnowledgeStore(SqliteStore):
     SCHEMA = (
         f"CREATE TABLE IF NOT EXISTS facts ({_FACTS_COLUMNS})",
@@ -96,6 +112,13 @@ class KnowledgeStore(SqliteStore):
         "ts TEXT NOT NULL, "
         "UNIQUE (scope, key))",
     )
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = super()._connect()
+        # Поиск сравнивает свёрнутые строки: LIKE без ICU не различает регистр
+        # только у латиницы, и «База» не находила «база» (аудит 25.09, MEM3).
+        conn.create_function("fold", 1, _fold_sql, deterministic=True)
+        return conn
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         self._add_column(conn, "facts", "kind", "TEXT NOT NULL DEFAULT 'stable'")
@@ -224,36 +247,41 @@ class KnowledgeStore(SqliteStore):
             return cur.rowcount > 0
 
     def recall(self, scope: str | None = None, query: str | None = None,
-               history: bool = False) -> list[dict]:
-        sql = ("SELECT scope, key, value, kind, description FROM facts "
+               history: bool = False, *, dated: bool = False) -> list[dict]:
+        """`dated` — добавить `age_days`: сколько дней факт не подтверждался."""
+        sql = ("SELECT scope, key, value, kind, description, confirmed_at FROM facts "
                "WHERE valid_until IS NULL")
         conds: list[str] = []
         params: list[str] = []
         if scope is not None:
-            conds.append("scope = ?")
-            params.append(scope)
-        if query is not None:
+            conds.append("fold(scope) = ?")
+            params.append(fold(scope))
+        words = query.split() if query is not None else []
+        if words:
             # По слову, а не целой строкой: в query приходит набор ключей из
             # оглавления памяти, и одной подстрокой он не совпадал ни с чем —
             # вместо нужных фактов Директор получал пустоту и собирал их заново.
-            words = query.split()
-            if words:
-                conds.append("(" + " OR ".join(
-                    ["(key LIKE ? OR value LIKE ? OR description LIKE ?)"] * len(words)
-                ) + ")")
-                for word in words:
-                    params.extend([f"%{word}%"] * 3)
+            # Основа слова — как в журнале: «контейнера» находит «контейнере».
+            conds.append("(" + " OR ".join(
+                ["(fold(key) LIKE ? OR fold(value) LIKE ? OR fold(description) LIKE ?)"]
+                * len(words)
+            ) + ")")
+            for word in words:
+                params.extend([f"%{stem(fold(word))}%"] * 3)
         if conds:
             sql += " AND " + " AND ".join(conds)
         sql += " ORDER BY scope, key"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        facts = [{"scope": s, "key": k, "value": v, "kind": kind, "description": d}
-                 for s, k, v, kind, d in rows]
-        # Хит засчитываем только адресному запросу: дамп всей памяти одним вызовом
-        # поднял бы силу всем фактам разом и стёр разницу между ними.
-        if conds:
-            self._touch([(f["scope"], f["key"]) for f in facts])
+        now = datetime.now(timezone.utc)
+        facts = [{"scope": s, "key": k, "value": v, "kind": kind, "description": d,
+                  **({"age_days": age_days(at, now)} if dated else {})}
+                 for s, k, v, kind, d, at in rows]
+        # Хит — только поиску по словам: дамп всей памяти или целой области (а с
+        # него промпт велит начинать) поднимал силу всем фактам разом, и она мерила
+        # популярность области, а не факта (аудит 25.09, MEM2).
+        if words:
+            self.touch([(f["scope"], f["key"]) for f in facts])
         if history:
             self._attach_history(facts)
         return facts
@@ -277,7 +305,9 @@ class KnowledgeStore(SqliteStore):
             if versions:
                 fact["history"] = versions
 
-    def _touch(self, keys: list[tuple[str, str]]) -> None:
+    def touch(self, keys: list[tuple[str, str]]) -> None:
+        """Засчитать хит: факт реально пошёл в дело — нашёлся по словам или ушёл
+        в поручение агенту."""
         if not keys:
             return
         now = datetime.now(timezone.utc).isoformat()
@@ -330,13 +360,15 @@ class KnowledgeStore(SqliteStore):
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT scope, key, description, kind FROM facts WHERE valid_until IS NULL "
-                "ORDER BY scope, hits DESC, last_used DESC, valid_from DESC"
+                "ORDER BY hits DESC, last_used DESC, valid_from DESC"
             ).fetchall()
+        # rank — место по силе среди всех фактов, а не внутри области: по нему бюджет
+        # оглавления раздаётся через все области сразу.
         index: dict[str, list[dict]] = {}
-        for scope, key, description, kind in rows:
+        for rank, (scope, key, description, kind) in enumerate(rows):
             index.setdefault(scope, []).append(
-                {"key": key, "description": description, "kind": kind})
-        return [{"scope": s, "facts": f} for s, f in index.items()]
+                {"key": key, "description": description, "kind": kind, "rank": rank})
+        return [{"scope": s, "facts": index[s]} for s in sorted(index)]
 
     def all_live(self) -> list[dict]:
         """Действующие факты вместе с датой последнего подтверждения — для lint'а.

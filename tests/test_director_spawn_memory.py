@@ -346,7 +346,27 @@ def test_memory_index_collapses_tail_when_budget_spent():
     lines = _render_index([area], token_budget=40)
 
     assert lines[-1].startswith("  - ... ещё ")
-    assert sum(len(l) // 4 + 1 for l in lines[:-1]) <= 40
+    # в бюджете и сама строка «ещё N» — раньше она дописывалась сверх него
+    assert sum(len(l) // 4 + 1 for l in lines) <= 40
+
+
+def test_memory_index_budget_follows_strength_across_scopes(tmp_path):
+    """Аудит 25.09 MEM1: области шли по алфавиту и первые съедали весь бюджет —
+    факт с полусотней обращений из области «zzz» в оглавление не попадал."""
+    from app.agents.director import _render_index
+
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    for i in range(80):
+        store.remember("aaa_rarely_used", f"k{i}", "v",
+                       description="длинное описание редко нужного факта про что-то")
+    store.remember("zzz_hot", "prod_db", "postgres в cabinet-db", description="где база кабинета")
+    store.touch([("zzz_hot", "prod_db")] * 50)
+
+    lines = _render_index(store.index(), token_budget=800)
+
+    assert "  - prod_db — где база кабинета" in lines
+    assert sum(len(l) // 4 + 1 for l in lines) <= 800
+    assert "- aaa_rarely_used:" in lines and any("ещё" in l for l in lines)
 
 
 # ---------- подтверждения специалистов: отдельный запрос на каждый вызов (аудит F04) ----------
@@ -751,3 +771,70 @@ async def test_spawn_does_not_give_closed_fact_version(tmp_path):
 
     assert "новая база" in prompt
     assert "старая база" not in prompt
+
+
+# ---------- возраст и сила фактов, ушедших в поручение (аудит 25.09, MEM2/MEM4) ----------
+
+def _age(store: KnowledgeStore, key: str, days: int) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    ts = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with store._connect() as conn:
+        conn.execute("UPDATE facts SET confirmed_at = ? WHERE key = ?", (ts, key))
+
+
+async def test_cited_facts_carry_their_age_and_stale_ones_ask_for_a_check(tmp_path):
+    """Снимок полугодовой давности уходил агенту как «уже проверены — не добывай»."""
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("bot", "cabinet_db", "база cabinet в glowshine-postgres-1")
+    store.remember("node", "xray_version", "25.1.30", kind="snapshot")
+    _age(store, "xray_version", 40)
+
+    prompt = await _spawn_prompt(store, "cabinet_db и xray_version: сверь версию")
+
+    assert "уже проверены" not in prompt
+    assert "`bot/cabinet_db` = база cabinet в glowshine-postgres-1 (подтверждён сегодня)" in prompt
+    assert "`node/xray_version` = 25.1.30 (подтверждён 40 дн. назад — может устареть" in prompt
+
+
+async def test_freshest_cited_facts_win_when_there_are_too_many(tmp_path):
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    for i in range(7):
+        store.remember("app", f"setting_{i}", f"значение {i}")
+        _age(store, f"setting_{i}", 10 * i)
+
+    prompt = await _spawn_prompt(store, " ".join(f"setting_{i}" for i in range(7)))
+
+    assert "setting_0" in prompt.split("Факты из памяти")[1]
+    assert "`app/setting_6`" not in prompt
+
+
+async def test_facts_that_went_into_the_task_gain_strength(tmp_path):
+    """Сила — то, что факт пошёл в дело: назван ключом или выписан значением."""
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("bot", "cabinet_db", "postgres в glowshine-postgres-1")
+    store.remember("docker", "compose_path", "/opt/glowshine/deploy")
+    store.remember("host", "untouched", "что-то ещё")
+
+    await _spawn_prompt(store, "посмотри cabinet_db; стек лежит в /opt/glowshine/deploy")
+
+    with store._connect() as conn:
+        hits = dict(conn.execute("SELECT key, hits FROM facts").fetchall())
+    assert hits == {"cabinet_db": 1, "compose_path": 1, "untouched": 0}
+
+
+async def test_recall_facts_reports_age_and_marks_stale(tmp_path):
+    from app.memory.tools import build_tools
+
+    store = KnowledgeStore(str(tmp_path / "f.db"))
+    store.remember("node", "xray_version", "25.1.30", kind="snapshot")
+    store.remember("node", "ssh_port", "22")
+    _age(store, "xray_version", 40)
+    recall = next(t for t in build_tools(store) if t.name == "recall_facts")
+
+    out = await recall.fn(scope="node")
+
+    by_key = {f["key"]: f for f in out["facts"]}
+    assert by_key["xray_version"]["age_days"] == 40 and by_key["xray_version"]["stale"]
+    assert by_key["ssh_port"]["age_days"] == 0 and "stale" not in by_key["ssh_port"]
+    assert "remember_fact" in out["note"]

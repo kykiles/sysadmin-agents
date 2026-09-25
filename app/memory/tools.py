@@ -3,6 +3,7 @@ from collections.abc import Callable
 from pydantic import BaseModel, Field
 
 from agent_memory.facts import KnowledgeStore
+from app.config import settings
 from app.logging import redact
 from app.tools.base import Tool, Safety
 
@@ -42,6 +43,15 @@ class RecallParams(BaseModel):
     )
 
 
+def stale(kind: str, age: int | None) -> bool:
+    """Давно не подтверждалось — те же сроки, что у самопроверки в /learn."""
+    if age is None:
+        return False
+    limit = (settings.lint_stale_snapshot_days if kind == "snapshot"
+             else settings.lint_stale_stable_days)
+    return age >= limit
+
+
 def build_tools(store: KnowledgeStore,
                 provenance: Callable[[], dict] | None = None) -> list[Tool]:
     """Инструменты памяти. Не скилл: память принадлежит Директору и временным
@@ -56,7 +66,18 @@ def build_tools(store: KnowledgeStore,
 
     async def recall_facts(scope: str | None = None, query: str | None = None,
                            history: bool = False) -> dict:
-        return {"facts": store.recall(scope=scope, query=query, history=history)}
+        # Возраст не прячем: снимок полугодовой давности без даты читался как
+        # сегодняшний и уходил агенту «уже проверенным» (аудит 25.09, MEM4).
+        facts = store.recall(scope=scope, query=query, history=history, dated=True)
+        for fact in facts:
+            if stale(fact["kind"], fact["age_days"]):
+                fact["stale"] = True
+        out: dict = {"facts": facts}
+        if any(f.get("stale") for f in facts):
+            out["note"] = ("stale — давно не подтверждалось: прежде чем опираться, поручи "
+                           "агенту проверить одним вызовом; то же значение, записанное "
+                           "снова через remember_fact, подтвердит факт")
+        return out
 
     async def remember_fact(scope: str, key: str, value: str, description: str = "",
                             kind: str = "stable") -> dict:
@@ -100,6 +121,8 @@ def build_tools(store: KnowledgeStore,
         return out
 
     return [
-        Tool("recall_facts", "Recall stored facts (all, by scope, or by query substring). Safe.", RecallParams, recall_facts, Safety.SAFE),
+        Tool("recall_facts", "Recall stored facts (all, by scope, or by query words). Each fact "
+             "comes with age_days since it was last confirmed; stale=true means it may be "
+             "outdated. Safe.", RecallParams, recall_facts, Safety.SAFE),
         Tool("remember_fact", "Store a durable fact that will be needed in a future task. Writing the same value again confirms it; a different value supersedes it, the old one is kept as history. Safe.", RememberParams, remember_fact, Safety.SAFE),
     ]

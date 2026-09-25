@@ -19,10 +19,10 @@ from app.agents.messages import Task, Result
 from app.bot.reports import save_report
 from app.config import settings
 from app.llm.client import LLMClient, Usage
-from agent_memory.facts import KIND_LABELS, KnowledgeStore
+from agent_memory.facts import KIND_LABELS, KnowledgeStore, age_days
 from app.logging import get_logger, redact
 from app.skills.loader import load_all_skills
-from app.memory.tools import build_tools as memory_tools
+from app.memory.tools import build_tools as memory_tools, stale
 from app.skills.readonly import HostAccess, build_host_tools
 from app.skills.resources import build_resource_tools
 from app.tools.base import Tool, Safety
@@ -255,29 +255,51 @@ def _steps_block(steps: dict[int, str]) -> str:
     )
 
 
-def _cited_facts(facts: KnowledgeStore | None, task: str, limit: int = 5) -> str:
-    """Значения фактов, на чьи ключи ссылается поручение агенту.
+def _task_facts(facts: KnowledgeStore | None, task: str) -> tuple[list[dict], list[dict]]:
+    """Действующие факты, которые называет поручение агенту: (ключом, значением).
 
-    Прод 23.09 (6918b8cf): Директор написал «база описана фактом cabinet_db» без
-    значения, и агент без своей памяти искал базу заново. Ключ ищем как `scope/key`
-    или голым словом; голый — только если он не похож на обычное слово (есть «_»
-    или длина от 6), иначе `nodes` цеплялся бы к любому тексту про ноды.
+    Названным ключом значение нужно агенту в промпте. Прод 23.09 (6918b8cf):
+    Директор написал «база описана фактом cabinet_db» без значения, и агент без своей
+    памяти искал базу заново. Ключ ищем как `scope/key` или голым словом; голый —
+    только если он не похож на обычное слово (есть «_» или длина от 6), иначе `nodes`
+    цеплялся бы к любому тексту про ноды. Значение, которое Директор уже выписал в
+    task, ищем от восьми символов: короткое («22», «UTC») встречается и само по себе.
+    И те и другие реально пошли в дело — это и есть сила факта.
     """
     if facts is None:
-        return ""
-    lines = []
+        return [], []
+    by_key, by_value = [], []
     for f in facts.all_live():
         name = f"{f['scope']}/{f['key']}"
-        cited = re.search(rf"(?<!\w){re.escape(name)}(?!\w)", task) or (
+        if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", task) or (
             ("_" in f["key"] or len(f["key"]) >= 6)
             and re.search(rf"(?<![\w/]){re.escape(f['key'])}(?!\w)", task)
-        )
-        if cited:
-            lines.append(f"- `{name}` = {f['value']}")
-    if not lines:
+        ):
+            by_key.append(f)
+        elif len(value := f["value"].strip()) >= 8 and value in task:
+            by_value.append(f)
+    return by_key, by_value
+
+
+def _cited_facts(cited: list[dict], limit: int = 5) -> str:
+    """Значения фактов, названных в поручении, — с датой подтверждения. Раньше они
+    шли агенту как «уже проверены — не добывай заново» при любой давности, и снимок
+    полугодовой давности никто не перепроверял (аудит 25.09, MEM4)."""
+    if not cited:
         return ""
-    return ("Факты из памяти, на которые ссылается поручение (уже проверены — "
-            "не добывай их заново):\n" + "\n".join(lines[:limit]))
+    now = datetime.now(timezone.utc)
+    lines = []
+    # Свежие первыми: all_live отдаёт по возрастанию, и при переполнении в промпт
+    # попадали самые старые.
+    for f in sorted(cited, key=lambda f: f["confirmed_at"], reverse=True)[:limit]:
+        age = age_days(f["confirmed_at"], now)
+        when = ("дата подтверждения неизвестна" if age is None
+                else "подтверждён сегодня" if age == 0 else f"подтверждён {age} дн. назад")
+        if stale(f["kind"], age):
+            when += " — может устареть: проверь одним вызовом, прежде чем опираться"
+        lines.append(f"- `{f['scope']}/{f['key']}` = {f['value']} ({when})")
+    return ("Факты из памяти, на которые ссылается поручение. Заново их не добывай, "
+            "но сверяй с тем, что видишь:\n" + "\n".join(lines))
 
 
 def _memory_index(facts: KnowledgeStore | None) -> str:
@@ -305,29 +327,50 @@ def _memory_index(facts: KnowledgeStore | None) -> str:
 
 
 def _render_index(index: list[dict], token_budget: int) -> list[str]:
+    """Строки оглавления в пределах бюджета.
+
+    Бюджет раздаётся по силе через все области сразу (`rank` из index()): раньше
+    области шли по алфавиту, и первые съедали его целиком — факт с полусотней
+    обращений из области на «z» в оглавление не попадал (аудит 25.09, MEM1).
+    Заголовки областей и строки «ещё N» тоже стоят токенов — они учтены, а не
+    дописаны сверх бюджета.
+    """
+    def cost(line: str) -> int:
+        return len(line) // 4 + 1
+
+    def fact_line(fact: dict) -> str:
+        line = f"  - {fact['key']}"
+        # Урок и запрет — не факты об инфраструктуре, а выводы из неудач; без
+        # пометки «перед деплоем проверь бэкап» читается как топология.
+        if label := KIND_LABELS.get(fact["kind"], ""):
+            line += f" ({label})"
+        if fact["description"]:
+            line += f" — {fact['description']}"
+        return line
+
+    def tail(scope: str, left: int) -> str:
+        return f"  - ... ещё {left} (recall_facts(scope=\"{scope}\"))"
+
+    heads = sum(cost(f"- {area['scope']}:") for area in index)
+    ranked = sorted(((f.get("rank", i), area["scope"], f) for area in index
+                     for i, f in enumerate(area["facts"])), key=lambda r: r[0])
+    if heads + sum(cost(fact_line(f)) for _, _, f in ranked) <= token_budget:
+        shown = {(scope, f["key"]) for _, scope, f in ranked}
+    else:
+        # Не влезает всё — строку «ещё N» резервируем каждой области заранее.
+        left = token_budget - heads - sum(cost(tail(a["scope"], len(a["facts"]))) for a in index)
+        shown = set()
+        for _, scope, fact in ranked:
+            if (c := cost(fact_line(fact))) > left:
+                break
+            shown.add((scope, fact["key"]))
+            left -= c
     lines: list[str] = []
-    used = 0
     for area in index:
         lines.append(f"- {area['scope']}:")
-        used += len(lines[-1]) // 4 + 1
-        shown = 0
-        for fact in area["facts"]:
-            line = f"  - {fact['key']}"
-            # Урок и запрет — не факты об инфраструктуре, а выводы из неудач; без
-            # пометки «перед деплоем проверь бэкап» читается как топология.
-            if label := KIND_LABELS.get(fact["kind"], ""):
-                line += f" ({label})"
-            if fact["description"]:
-                line += f" — {fact['description']}"
-            cost = len(line) // 4 + 1
-            if used + cost > token_budget:
-                break
-            lines.append(line)
-            used += cost
-            shown += 1
-        left = len(area["facts"]) - shown
-        if left:
-            lines.append(f"  - ... ещё {left} (recall_facts(scope=\"{area['scope']}\"))")
+        lines += [fact_line(f) for f in area["facts"] if (area["scope"], f["key"]) in shown]
+        if hidden := sum((area["scope"], f["key"]) not in shown for f in area["facts"]):
+            lines.append(tail(area["scope"], hidden))
     return lines
 
 
@@ -460,8 +503,13 @@ class Director(Agent):
             prompt = compose_prompt(role, chosen)
             if plan is not None:
                 prompt += "\n\n" + _steps_block({n: plan[n - 1] for n in steps})
-            if cited := _cited_facts(facts, task):
+            by_key, by_value = await asyncio.to_thread(_task_facts, facts, task)
+            if cited := _cited_facts(by_key):
                 prompt += "\n\n" + cited
+            if by_key or by_value:
+                # Сила факта — то, что он реально пошёл в дело, а не попал в выборку.
+                await asyncio.to_thread(
+                    facts.touch, [(f["scope"], f["key"]) for f in (*by_key, *by_value)])
             sub = Agent(
                 name=f"spawned:{'+'.join(skills)}",
                 system_prompt=prompt,

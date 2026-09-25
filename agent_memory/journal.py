@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from agent_memory.store import SqliteStore
+from agent_memory.text import stem
 
 # Слова запроса подаём в FTS как строковые литералы через OR: так пользовательский
 # текст не может оказаться синтаксисом FTS (NEAR, ^, "), а bm25 ранжирует по числу
@@ -11,22 +12,11 @@ from agent_memory.store import SqliteStore
 _WORD = re.compile(r"\w+", re.UNICODE)
 
 
-def _stem(word: str) -> str:
-    """Отрезать окончание, чтобы «инбаунде» нашло «инбаунда».
-
-    Токенизатор FTS5 морфологии не знает, а по-русски одну задачу дважды одинаково
-    не формулируют. Режем два последних символа (но не короче четырёх) и ищем по
-    префиксу.
-    ponytail: наивное отсечение, даёт ложные совпадения на коротких словах;
-    snowballstemmer, если точность станет мешать.
-    """
-    return word if len(word) < 5 else word[: max(4, len(word) - 2)]
-
-
 def _match_query(query: str) -> str:
+    # Токенизатор FTS5 морфологии не знает: основу слова ищем префиксом.
     words = _WORD.findall(query.lower())
     return " OR ".join(
-        f'"{_stem(w)}"*' if len(w) >= 5 else f'"{w}"' for w in words
+        f'"{stem(w)}"*' if len(w) >= 5 else f'"{w}"' for w in words
     )
 
 

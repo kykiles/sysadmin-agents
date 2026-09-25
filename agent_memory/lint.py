@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from agent_memory.facts import KnowledgeStore
+from agent_memory.facts import KnowledgeStore, age_days
 from agent_memory.store import SqliteStore
 
 log = logging.getLogger(__name__)
@@ -45,16 +45,6 @@ class LintState(SqliteStore):
             )
 
 
-def _age_days(ts: str, now: datetime) -> int | None:
-    try:
-        stored = datetime.fromisoformat(ts)
-    except ValueError:
-        return None
-    if stored.tzinfo is None:
-        stored = stored.replace(tzinfo=timezone.utc)
-    return (now - stored).days
-
-
 def find_stale(
     store: KnowledgeStore,
     state: LintState,
@@ -78,7 +68,7 @@ def find_stale(
             continue
         # Возраст — от последнего подтверждения: факт, записанный полгода назад,
         # но подтверждённый вчера, не устарел.
-        age = _age_days(fact["confirmed_at"], now)
+        age = age_days(fact["confirmed_at"], now)
         if age is None:
             log.warning("bad_fact_ts scope=%s key=%s confirmed_at=%s",
                         fact["scope"], fact["key"], fact["confirmed_at"])
