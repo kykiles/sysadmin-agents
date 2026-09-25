@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app import audit
 from app.config import settings
-from app.llm.client import LLMClient, Usage
+from app.llm.client import ChoiceMessage, LLMClient, Usage
 from app.tools.base import Tool, Safety, INTENT_FIELD
 from app.agents.messages import Task, Result, ConfirmationRequest, Decision
 from app.agents.episode import Episode, error_of
@@ -25,6 +25,15 @@ _BAD_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu]|u[0-9a-fA-F]{4})')
 # аргументов, кода возврата и объёма. У изменяющих превью прежнее — они наперечёт,
 # и по ним потом отвечают на вопрос «что именно сделали с сервером».
 _SAFE_PREVIEW_CHARS = 300
+
+# Лимит шагов — не повод выбросить собранное: без итогового хода Директор получал от
+# агента одну строку «достигнут лимит итераций», а находки всех его вызовов умирали
+# вместе с контекстом (аудит 25.09, A2). Ход без вызовов — только сводка.
+_WRAP_UP = (
+    "Лимит шагов исчерпан, вызовов больше не будет. Подведи итог по тому, что уже "
+    "собрано: что выяснил — с конкретикой из вывода инструментов, что сделал, что не "
+    "успел и что стоит проверить дальше."
+)
 
 
 def clamp_output(text: str, limit: int) -> str:
@@ -260,10 +269,28 @@ class Agent:
             self._episode.gave_up(f"{self.name}: {note}")
         else:
             self._episode.broke(f"{self.name}: {note}")
-        content = redact("\n\n".join([*said, note]))
+        summary = ""
+        if (wrap := await self._wrap_up(messages)) is not None:
+            usage += wrap.usage
+            summary = (wrap.content or "").strip()
+            messages.append({"role": "user", "content": _WRAP_UP})
+        content = redact("\n\n".join([*said, *filter(None, [summary]), note]))
         if self._memory:
             await asyncio.to_thread(self._memory.append, task.chat_id, "user", redact(task.content))
             await asyncio.to_thread(self._memory.append, task.chat_id, "assistant", content)
         return Result(task_id=task.id, content=content, success=False,
-                      final=note, trace=trace, iterations=iterations, usage=usage,
+                      final=redact(summary) or note, trace=trace, iterations=iterations,
+                      usage=usage,
                       transcript=[*messages, {"role": "assistant", "content": content}])
+
+    async def _wrap_up(self, messages: list[dict]) -> ChoiceMessage | None:
+        """Итоговый ход без вызовов, когда шаги кончились. Сбой этого хода не должен
+        отнять у задачи ответ — тогда остаётся прежняя пометка о лимите."""
+        try:
+            return await self._llm.chat(
+                [*messages, {"role": "user", "content": _WRAP_UP}],
+                [t.schema() for t in self.tools], tool_choice="none",
+            )
+        except Exception:
+            log.warning("wrap_up_failed", agent=self.name)
+            return None

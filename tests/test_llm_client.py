@@ -65,6 +65,21 @@ async def test_chat_without_usage_still_counts_the_call():
     assert msg.usage == Usage(calls=1)
 
 
+async def test_tool_choice_reaches_sdk_only_with_tools():
+    """Итоговый ход агента: та же история, инструменты переданы, вызывать их нельзя."""
+    from openai import NOT_GIVEN
+
+    client = LLMClient(api_key="k", base_url="http://x", model="m")
+    fake_msg = type("M", (), {"content": "итог", "tool_calls": None})()
+    create = AsyncMock(return_value=_resp(fake_msg))
+    tools = [{"type": "function", "function": {"name": "docker_ps"}}]
+    with patch.object(client._client.chat.completions, "create", new=create):
+        await client.chat([{"role": "user", "content": "x"}], tools, tool_choice="none")
+        await client.chat([{"role": "user", "content": "x"}], tool_choice="none")
+    assert create.await_args_list[0].kwargs["tool_choice"] == "none"
+    assert create.await_args_list[1].kwargs["tool_choice"] is NOT_GIVEN
+
+
 def test_timeout_and_retries_reach_sdk():
     """Дефолт SDK — 600 с × 2 повтора: зависший ход держал задачу больше 10 минут."""
     client = LLMClient(api_key="k", base_url="http://x", model="m", timeout=360, max_retries=1)

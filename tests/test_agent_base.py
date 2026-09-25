@@ -273,6 +273,64 @@ async def test_max_iterations_keeps_partial_answer(monkeypatch):
     assert mem.items[-1]["content"] == res.content
 
 
+class RecordingLLM(FakeLLM):
+    """FakeLLM, который помнит, с какими инструментами и tool_choice его звали."""
+
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.calls = []
+
+    async def chat(self, messages, tools=None, tool_choice=None):
+        self.calls.append({"messages": list(messages), "tools": tools, "tool_choice": tool_choice})
+        return self._r.pop(0)
+
+
+def _echo_call(i):
+    return ChoiceMessage(content=None, tool_calls=[
+        ToolCall(id=f"c{i}", function=ToolCallFunction(name="echo", arguments=json.dumps({"x": "hi"})))])
+
+
+async def test_limit_ends_with_summary_of_what_was_found(monkeypatch):
+    """Аудит 25.09 A2: на лимите Директор получал одну строку «достигнут лимит»,
+    а находки всех вызовов агента умирали вместе с его контекстом."""
+    from app.agents import base as base_mod
+    from app.llm.client import Usage
+
+    monkeypatch.setattr(base_mod.settings, "agent_max_iterations", 2)
+    summary = ChoiceMessage(content="Итог: /var заполнен на 97%", tool_calls=None,
+                            usage=Usage(calls=1))
+    llm = RecordingLLM([_echo_call(1), _echo_call(2), summary])
+    agent = Agent(name="t", system_prompt="sys", tools=[make_tool()], llm=llm)
+    res = await agent.handle(Task(content="почему тормозит"))
+
+    wrap = llm.calls[-1]
+    assert wrap["tool_choice"] == "none" and wrap["tools"]
+    assert "Лимит шагов исчерпан" in wrap["messages"][-1]["content"]
+    assert res.success is False
+    assert res.final == "Итог: /var заполнен на 97%"
+    assert "/var заполнен на 97%" in res.content and "лимит итераций" in res.content
+    assert res.usage.calls == 1  # цена итогового хода учтена
+    assert res.iterations == 2
+
+
+async def test_failed_wrap_up_keeps_the_limit_note(monkeypatch):
+    from app.agents import base as base_mod
+
+    monkeypatch.setattr(base_mod.settings, "agent_max_iterations", 2)
+
+    class DownOnWrapUp(RecordingLLM):
+        async def chat(self, messages, tools=None, tool_choice=None):
+            if tool_choice == "none":
+                raise RuntimeError("upstream down")
+            return await super().chat(messages, tools, tool_choice)
+
+    agent = Agent(name="t", system_prompt="sys", tools=[make_tool()],
+                  llm=DownOnWrapUp([_echo_call(1), _echo_call(2)]))
+    res = await agent.handle(Task(content="почему тормозит"))
+    assert res.success is False
+    assert res.final == "достигнут лимит итераций (2), ответ может быть неполным"
+
+
 class FakeMemory:
     def __init__(self):
         self.items = []

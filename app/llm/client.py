@@ -63,7 +63,8 @@ class LLMClient:
         self._model = model
 
     async def chat(
-        self, messages: list[dict], tools: list[dict] | None = None
+        self, messages: list[dict], tools: list[dict] | None = None,
+        tool_choice: str | None = None,
     ) -> ChoiceMessage:
         # Шлюз иногда заворачивает моргание апстрима в 400 "Upstream request
         # failed" — не наша ошибка запроса, а транзиент. SDK такой 400 не
@@ -76,6 +77,10 @@ class LLMClient:
                     model=self._model,
                     messages=messages,
                     tools=tools if tools else NOT_GIVEN,
+                    # "none" — ход без вызовов при той же истории: сами инструменты
+                    # передаём, потому что без них часть провайдеров не принимает
+                    # историю с tool_calls.
+                    tool_choice=tool_choice if tools and tool_choice else NOT_GIVEN,
                     # Без этого OpenRouter вернёт только токены, а цену ходов
                     # пришлось бы считать по прайсу модели вручную.
                     extra_body={"usage": {"include": True}},
