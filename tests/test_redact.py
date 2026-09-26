@@ -99,6 +99,34 @@ def test_setup_logging_scrubs_every_log_field(tmp_path, monkeypatch):
     assert "passw0rd123" not in event["url"]
 
 
+def test_structlog_events_reach_audit_file(tmp_path, monkeypatch):
+    """llm_call пишет structlog: в stdout контейнера он живёт до пересборки,
+    а замеры нужны за неделю — строка должна лечь в файл на томе."""
+    import logging
+    import structlog
+    from app import logging as app_logging
+
+    path = tmp_path / "audit.log"
+    monkeypatch.setattr(app_logging.settings, "audit_log_path", str(path))
+    root = logging.getLogger()
+    handlers, level = list(root.handlers), root.level
+    # у pytest свои обработчики на root — basicConfig молчит и уровень не поднимает
+    root.setLevel(logging.INFO)
+    try:
+        app_logging.setup_logging()
+        app_logging.get_logger("t").info("llm_call", ms=1234, key="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig")
+    finally:
+        root.setLevel(level)
+        structlog.reset_defaults()
+        for h in root.handlers[len(handlers):]:
+            root.removeHandler(h)
+            h.close()
+    text = path.read_text()
+    assert "llm_call" in text and "ms=1234" in text
+    assert "eyJhbGciOiJIUzI1NiJ9" not in text
+    assert "\x1b[" not in text  # без цветовых кодов — файл читают grep и python
+
+
 def test_pem_private_key_removed():
     key = ("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU\n"
            "-----END OPENSSH PRIVATE KEY-----")

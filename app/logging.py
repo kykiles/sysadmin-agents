@@ -86,10 +86,12 @@ def setup_logging() -> None:
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             scrub_event,
-            structlog.dev.ConsoleRenderer(),
+            structlog.dev.ConsoleRenderer(colors=False),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-        logger_factory=structlog.PrintLoggerFactory(),
+        # Через stdlib, а не print: stdout контейнера пропадает при пересборке,
+        # а audit.log на томе — нет (замеры llm_call копятся неделями).
+        logger_factory=structlog.stdlib.LoggerFactory(),
     )
 
 
