@@ -185,6 +185,12 @@ def test_nproc_and_uptime_direct(access):
     assert not is_read_only(["sh", "-c", "echo '=== load ==='; uptime; nproc"], access.binaries)
 
 
+def test_observe_reads_date_but_cannot_set_it():
+    # окна log_stats задаются временем — агент должен уметь его узнать (разбор 28.09)
+    assert is_read_only(["date", "-u", "+%s"], OBSERVE.binaries)
+    assert not is_read_only(["date", "-s", "2030-01-01"], OBSERVE.binaries)
+
+
 def test_union_of_scopes_sees_both():
     both = TLS | SECURITY
     assert is_read_only(["certbot", "certificates"], both.binaries)
