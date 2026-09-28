@@ -61,16 +61,65 @@ async def test_docker_inspect_projects_and_omits_env():
     assert "Env" not in json.dumps(insp)
 
 
-def test_project_stats_compact():
-    out = dk._project_stats({
-        "memory_stats": {"usage": 100, "limit": 1000, "stats": {"a": 1}},
-        "cpu_stats": {"cpu_usage": {"total_usage": 5}, "system_cpu_usage": 50, "online_cpus": 2},
+def _snap(total, pre_total, system, pre_system, cpus=2, mem=None, limit=1000):
+    return {
+        "memory_stats": {"usage": 100 * 2**20, "limit": 1000 * 2**20, **({"stats": mem} if mem else {})},
+        "cpu_stats": {"cpu_usage": {"total_usage": total}, "system_cpu_usage": system, "online_cpus": cpus},
+        "precpu_stats": {"cpu_usage": {"total_usage": pre_total}, "system_cpu_usage": pre_system},
         "pids_stats": {"current": 7},
-    })
-    assert out == {
-        "memory_usage": 100, "memory_limit": 1000,
-        "cpu_total_usage": 5, "system_cpu_usage": 50, "online_cpus": 2, "pids": 7,
     }
+
+
+def test_project_stats_takes_list_as_aiodocker_returns_it():
+    out = dk._project_stats([_snap(400, 200, 3000, 1000)])
+    assert "raw" not in out
+    assert out == {"cpu_percent": 20.0, "memory_mib": 100.0, "memory_limit_mib": 1000.0,
+                   "memory_percent": 10.0, "pids": 7}
+
+
+def test_project_stats_cpu_percent_none_without_system_delta():
+    assert dk._project_stats(_snap(400, 200, 1000, 1000))["cpu_percent"] is None
+
+
+def test_project_stats_memory_minus_inactive_file():
+    v2 = dk._project_stats(_snap(2, 1, 2, 1, mem={"inactive_file": 40 * 2**20}))
+    v1 = dk._project_stats(_snap(2, 1, 2, 1, mem={"total_inactive_file": 30 * 2**20}))
+    assert v2["memory_mib"] == 60.0
+    assert v1["memory_mib"] == 70.0
+
+
+def _docker_with_stats(snaps):
+    """snaps: {имя: снимок}; контейнеры — как отдаёт containers.list()."""
+    def one(name, snap):
+        c = MagicMock()
+        c._container = {"Names": [f"/{name}"]}
+        c.stats = AsyncMock(return_value=[snap])
+        return c
+    listed = [one(n, s) for n, s in snaps.items()]
+    fake = MagicMock()
+    fake.containers = MagicMock()
+    fake.containers.list = AsyncMock(return_value=listed)
+    fake.containers.container = MagicMock(return_value=listed[0])
+    fake.__aenter__ = AsyncMock(return_value=fake)
+    fake.__aexit__ = AsyncMock(return_value=None)
+    return fake
+
+
+async def test_docker_stats_without_name_lists_running_sorted_by_cpu():
+    fake = _docker_with_stats({"idle": _snap(201, 200, 3000, 1000), "busy": _snap(400, 200, 3000, 1000)})
+    with patch("app.tools.docker.Docker", return_value=fake):
+        out = await dk.docker_stats()
+    assert [r["container"] for r in out["containers"]] == ["busy", "idle"]
+    fake.containers.list.assert_awaited_once_with()
+
+
+async def test_docker_stats_with_name_keeps_old_shape():
+    fake = _docker_with_stats({"bot": _snap(400, 200, 3000, 1000)})
+    with patch("app.tools.docker.Docker", return_value=fake):
+        out = await dk.docker_stats(container="bot")
+    assert out["container"] == "bot"
+    assert out["stats"]["cpu_percent"] == 20.0
+    assert "raw" not in json.dumps(out)
 
 
 async def test_docker_restart_dangerous():

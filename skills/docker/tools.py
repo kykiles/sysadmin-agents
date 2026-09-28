@@ -4,7 +4,7 @@ from app.tools.docker import (
     docker_ps, docker_logs, docker_stats, docker_inspect,
     docker_restart, docker_stop, docker_start, docker_exec, container_missing, container_guard,
     compose_ls, compose_ps, compose_up, compose_down, project_guard,
-    NoParams, LogsParams, ContainerParams, ExecParams, ProjectParams, ComposeUpParams,
+    NoParams, LogsParams, ContainerParams, StatsParams, ExecParams, ProjectParams, ComposeUpParams,
 )
 
 
@@ -17,7 +17,7 @@ def build_tools() -> list[Tool]:
     return [
         Tool("docker_ps", "List all docker containers. Use this to see what containers are available before inspecting specific ones.", NoParams, docker_ps, Safety.SAFE),
         Tool("docker_logs", "Get container logs", LogsParams, docker_logs, Safety.SAFE),
-        Tool("docker_stats", "Get container resource stats", ContainerParams, docker_stats, Safety.SAFE),
+        Tool("docker_stats", "Get cpu/memory stats (already in percent and MiB). Without `container` — all running containers in one call, busiest first.", StatsParams, docker_stats, Safety.SAFE),
         Tool("docker_inspect", "Inspect container details", ContainerParams, docker_inspect, Safety.SAFE),
         Tool("compose_ls", "List docker compose projects under COMPOSE_PROJECTS_DIR", NoParams, compose_ls, Safety.SAFE),
         Tool("compose_ps", "List services of a compose project", ProjectParams, compose_ps, Safety.SAFE),

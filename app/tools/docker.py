@@ -12,6 +12,11 @@ class ContainerParams(BaseModel):
     container: str = Field(description="container name or id")
 
 
+class StatsParams(BaseModel):
+    container: str | None = Field(default=None, description="container name or id; "
+                                  "omit to get all running containers in one call")
+
+
 class LogsParams(BaseModel):
     container: str
     tail: int = Field(default=200, description="number of trailing log lines")
@@ -67,17 +72,38 @@ def _project_inspect(info: dict) -> dict:
     }
 
 
+def _mib(n: float | None) -> float | None:
+    return None if n is None else round(n / 2**20, 1)
+
+
 def _project_stats(stats: Any) -> dict:
+    """Сводка как у `docker stats`: проценты и MiB посчитаны здесь, а не моделью.
+    aiodocker при stream=False отдаёт список из одного снимка, не словарь."""
+    if isinstance(stats, list):
+        stats = stats[0] if stats else None
     if not isinstance(stats, dict):
-        return {"raw": stats}
+        stats = {}
     mem = stats.get("memory_stats") or {}
     cpu = stats.get("cpu_stats") or {}
+    pre = stats.get("precpu_stats") or {}
+
+    cpu_percent = None
+    d_cpu = (cpu.get("cpu_usage") or {}).get("total_usage"), (pre.get("cpu_usage") or {}).get("total_usage")
+    d_sys = cpu.get("system_cpu_usage"), pre.get("system_cpu_usage")
+    if None not in d_cpu + d_sys and cpu.get("online_cpus") and d_sys[0] > d_sys[1]:
+        cpu_percent = round((d_cpu[0] - d_cpu[1]) / (d_sys[0] - d_sys[1]) * cpu["online_cpus"] * 100, 1)
+
+    used = mem.get("usage")
+    if used is not None:
+        # кэш страниц не считается: v2 кладёт его в inactive_file, v1 — в total_inactive_file
+        mstats = mem.get("stats") or {}
+        used -= mstats.get("inactive_file", mstats.get("total_inactive_file", 0))
+    limit = mem.get("limit")
     return {
-        "memory_usage": mem.get("usage"),
-        "memory_limit": mem.get("limit"),
-        "cpu_total_usage": (cpu.get("cpu_usage") or {}).get("total_usage"),
-        "system_cpu_usage": cpu.get("system_cpu_usage"),
-        "online_cpus": cpu.get("online_cpus"),
+        "cpu_percent": cpu_percent,
+        "memory_mib": _mib(used),
+        "memory_limit_mib": _mib(limit),
+        "memory_percent": round(used / limit * 100, 1) if used is not None and limit else None,
         "pids": (stats.get("pids_stats") or {}).get("current"),
     }
 
@@ -97,11 +123,17 @@ async def docker_logs(container: str, tail: int = 200) -> dict:
         return {"container": container, "logs": "".join(logs)}
 
 
-async def docker_stats(container: str) -> dict:
+async def docker_stats(container: str | None = None) -> dict:
     async with Docker() as docker:
-        c = docker.containers.container(container)
-        stats = await c.stats(stream=False)
-        return {"container": container, "stats": _project_stats(stats)}
+        if container:
+            c = docker.containers.container(container)
+            return {"container": container, "stats": _project_stats(await c.stats(stream=False))}
+        running = await docker.containers.list()
+        snapshots = await asyncio.gather(*(c.stats(stream=False) for c in running))
+        rows = [{"container": c._container["Names"][0].lstrip("/"), **_project_stats(s)}
+                for c, s in zip(running, snapshots)]
+        rows.sort(key=lambda r: (r["cpu_percent"] is None, -(r["cpu_percent"] or 0)))
+        return {"containers": rows}
 
 
 async def docker_inspect(container: str) -> dict:

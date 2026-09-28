@@ -14,7 +14,7 @@ from app.skills.readonly import HostAccess, is_read_only, refusal
 from app.tools.base import Tool, Safety
 from app.tools.docker import (
     docker_ps, docker_logs, docker_stats, host_exec,
-    NoParams, ContainerParams, LogsParams,
+    NoParams, StatsParams, LogsParams,
 )
 
 ACCESS = HostAccess(binaries=frozenset({
@@ -168,7 +168,7 @@ def build_tools() -> list[Tool]:
     return [
         Tool("docker_ps", "List all containers with state/status/ports (read-only).", NoParams, docker_ps, Safety.SAFE),
         Tool("docker_logs", "Read trailing logs of a container (read-only).", LogsParams, docker_logs, Safety.SAFE),
-        Tool("docker_stats", "Read live cpu/memory/pids stats of a container (read-only).", ContainerParams, docker_stats, Safety.SAFE),
+        Tool("docker_stats", "Read live cpu/memory/pids stats (already in percent and MiB, read-only). Without `container` — all running containers in one call, busiest first.", StatsParams, docker_stats, Safety.SAFE),
         Tool("log_stats",
              "Count a distribution over log FILES on the host: how many times each value of "
              "`extract` occurs, optionally only on lines matching `where` and inside a numeric "

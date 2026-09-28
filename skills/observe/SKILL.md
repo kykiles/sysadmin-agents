@@ -28,7 +28,7 @@ description: 'Диагностика только чтением: журналы
 1. Общая нагрузка: `uptime`, `free -m`, `vmstat 1 3`, `df -h`.
 2. Кто ест ресурсы: `ps aux --sort=-%cpu` (топ по CPU), `ps aux --sort=-%mem` (по памяти).
 3. Диск/IO: `iostat -x 1 3` (если доступен), `du -h -d 1 /var/log`, `du -h -d 1 /opt`.
-4. Контейнеры: `docker_ps`, затем `docker_stats <container>` по подозрительным.
+4. Контейнеры: `docker_stats` без имени — все запущенные сразу, с именем — один контейнер.
 
 ### Плейбук: «почему упало / сервис недоступен»
 1. Статус юнита: `systemctl status <unit>`; последние логи: `journalctl -u <unit> -n 200 --no-pager`.
