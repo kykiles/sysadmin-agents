@@ -131,3 +131,50 @@ async def test_spawned_agent_limit_is_partial(monkeypatch):
     assert episode.problems() == [
         "spawned:host: достигнут лимит итераций (2), ответ может быть неполным"
     ]
+
+
+# ---------- отказ читающего вызова снимается удачным подтверждаемым (разбор 28.09) ----------
+
+def _tool(name: str, out: dict, safety: Safety = Safety.SAFE) -> Tool:
+    async def _fn(x: str = "", _intent: str = "") -> dict:
+        return out
+
+    return Tool(name, "d", P, _fn, safety)
+
+
+class _Approve:
+    async def request(self, req: ConfirmationRequest) -> Decision:
+        return Decision.APPROVED
+
+
+async def _run(tools: list[Tool], calls: list[ChoiceMessage]) -> Episode:
+    agent = Agent(name="t", system_prompt="sys", tools=tools,
+                  llm=FakeLLM([*calls, ChoiceMessage(content="готово", tool_calls=None)]),
+                  gateway=_Approve())
+    await agent.handle(Task(content="проверь"))
+    return agent._episode
+
+
+@pytest.mark.parametrize("read, write", [("ssh_query", "ssh_exec"), ("host_query", "shell_exec")])
+async def test_denied_read_tool_forgiven_by_confirmed_twin(read, write):
+    """ssh_query отказал (адрес не в NETWORK_ALLOWED) → ssh_exec с подтверждением прошёл."""
+    ep = await _run(
+        [_tool(read, {"error": "нет в NETWORK_ALLOWED — ssh_exec с подтверждением"}),
+         _tool(write, {"returncode": 255, "stderr": "timeout"}, Safety.DANGEROUS)],
+        [_call(read, "c1"), _call(write, "c2", _intent="Проверю ноду.")])
+    assert ep.problems() == []
+    assert ep.outcome() == "ok"
+
+
+async def test_successful_read_does_not_forgive_write_error():
+    ep = await _run(
+        [_tool("ssh_exec", {"error": "boom"}, Safety.DANGEROUS),
+         _tool("ssh_query", {"ok": True})],
+        [_call("ssh_exec", "c1", _intent="Запущу."), _call("ssh_query", "c2")])
+    assert ep.outcome() == "partial"
+    assert ep.problems() == ["ошибка ssh_exec: boom"]
+
+
+async def test_denied_read_tool_without_twin_stays_partial():
+    ep = await _run([_tool("ssh_query", {"error": "нет в NETWORK_ALLOWED"})], [_call("ssh_query")])
+    assert ep.outcome() == "partial"

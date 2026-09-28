@@ -26,6 +26,11 @@ def error_of(out: str) -> str | None:
         return str(data["error"])[:_MAX_ERROR_CHARS]
     return None
 
+# Подтверждаемый инструмент → читающий двойник. Отказ читающего вызова (адрес вне
+# NETWORK_ALLOWED, утилита не read-only) — маршрут, а не сбой: агент повторяет тот же
+# запрос через подтверждаемый инструмент, и если тот отработал, задача не partial.
+_READ_TWIN = {"ssh_exec": "ssh_query", "shell_exec": "host_query"}
+
 
 class Episode:
     def __init__(self) -> None:
@@ -48,6 +53,7 @@ class Episode:
 
     def tool_ok(self, tool: str) -> None:
         self._errors.pop(tool, None)
+        self._errors.pop(_READ_TWIN.get(tool), None)
 
     def plan_left(self, lines: list[str]) -> None:
         for line in lines:
