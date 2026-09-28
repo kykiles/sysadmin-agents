@@ -165,3 +165,55 @@ async def test_refuses_when_unpacked_archive_is_over_the_cap(monkeypatch):
 def test_log_stats_is_safe_and_declared():
     tool = next(t for t in st.build_tools() if t.name == "log_stats")
     assert tool.safety is Safety.SAFE
+
+
+# ---------- bucket: разбивка по времени одним вызовом (разбор 28.09: 24 вызова на часы) ----------
+
+BUCKET_LOG = "\n".join([
+    '{"ts":0,"status":200}',
+    '{"ts":10,"status":404}',
+    '{"ts":3605,"status":200}',
+    '{"ts":9000,"status":200}',
+])
+WIN = {"pattern": r'"ts":([0-9.]+)', "min": 0, "max": 10799}
+
+
+@pytest.fixture
+def bucket_host(monkeypatch):
+    async def fake_host_exec(command):
+        if command[0] == "stat":
+            return {"returncode": 0, "stdout": f"{len(BUCKET_LOG)}\n", "stderr": ""}
+        return {"returncode": 0, "stdout": BUCKET_LOG, "stderr": ""}
+
+    monkeypatch.setattr(st, "host_exec", fake_host_exec)
+
+
+async def test_bucket_counts_per_bucket_including_empty(bucket_host):
+    out = await st.log_stats(paths=["/var/log/a.log"], extract=r'"status":([0-9]+)',
+                             window=WIN, bucket=3600)
+    assert out["buckets"] == [[0, 2], [3600, 1], [7200, 1]]
+    hole = await st.log_stats(paths=["/var/log/a.log"], extract=r'"status":([0-9]+)',
+                              window={**WIN, "max": 12000}, bucket=1800)
+    assert [n for _, n in hole["buckets"]] == [2, 0, 1, 0, 0, 1, 0]
+
+
+async def test_bucket_respects_where(bucket_host):
+    out = await st.log_stats(paths=["/var/log/a.log"], extract=r'"status":([0-9]+)',
+                             where='"status":200', window=WIN, bucket=3600)
+    assert out["buckets"] == [[0, 1], [3600, 1], [7200, 1]]
+    assert out["top"] == [("200", 3)]
+
+
+async def test_bucket_without_window_is_an_error(bucket_host):
+    out = await st.log_stats(paths=["/var/log/a.log"], extract=".", bucket=3600)
+    assert "только с window" in out["error"]
+
+
+async def test_too_fine_bucket_is_an_error(bucket_host):
+    out = await st.log_stats(paths=["/var/log/a.log"], extract=".", window=WIN, bucket=1)
+    assert "слишком много корзин" in out["error"]
+
+
+async def test_no_bucket_no_buckets_key(bucket_host):
+    out = await st.log_stats(paths=["/var/log/a.log"], extract=r'"status":([0-9]+)', window=WIN)
+    assert "buckets" not in out

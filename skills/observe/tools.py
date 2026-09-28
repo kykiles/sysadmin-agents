@@ -27,6 +27,8 @@ ACCESS = HostAccess(binaries=frozenset({
 # Файл читается в память контейнера целиком: на 2 vCPU это потолок, за которым
 # счёт стоит дороже ответа. Больше — пусть агент сузит выборку сам.
 _MAX_BYTES = 64 * 1024 * 1024
+# Потолок корзин держит ответ коротким: тысячи строк «час — счёт» модели не нужны.
+_MAX_BUCKETS = 500
 _SAMPLE_CHARS = 300
 
 
@@ -46,6 +48,9 @@ class LogStatsParams(BaseModel):
     where: str | None = Field(default=None, description="optional regex; only lines matching it count")
     window: Window | None = Field(default=None, description="optional numeric range filter, "
                                                             "e.g. a unix-time window")
+    bucket: float | None = Field(default=None, gt=0,
+                                 description="with `window`: also count lines per bucket of this width, "
+                                             "in the units of the window value (3600 = hourly for unix time)")
     top: int = Field(default=20, ge=1, le=100, description="how many most frequent values to return")
 
 
@@ -83,8 +88,10 @@ async def _total_size(paths: list[str]) -> tuple[int, str]:
 
 
 def _count(text: str, rx: re.Pattern, rx_where: re.Pattern | None,
-           rx_win: re.Pattern | None, lo: float, hi: float, top: int) -> dict:
+           rx_win: re.Pattern | None, lo: float, hi: float, top: int,
+           bucket: float | None = None) -> dict:
     counts: Counter[str] = Counter()
+    per_bucket: Counter[int] = Counter()
     lines = text.splitlines()
     matched = extracted = 0
     sample = ""
@@ -101,6 +108,8 @@ def _count(text: str, rx: re.Pattern, rx_where: re.Pattern | None,
                 continue
             if not lo <= value <= hi:
                 continue
+            if bucket:
+                per_bucket[int((value - lo) // bucket)] += 1
         matched += 1
         if not sample:
             sample = line[:_SAMPLE_CHARS]
@@ -125,11 +134,19 @@ def _count(text: str, rx: re.Pattern, rx_where: re.Pattern | None,
     elif not extracted:
         out["note"] = ("`extract` не совпал ни в одной отобранной строке; `sample` — такая "
                        "строка, свери шаблон по ней")
+    if bucket:
+        # Пустые корзины остаются в ответе нулями: провал по времени виден сразу.
+        out["buckets"] = [[_num(lo + k * bucket), per_bucket[k]]
+                          for k in range(int((hi - lo) // bucket) + 1)]
     return out
 
 
+def _num(x: float) -> float | int:
+    return int(x) if float(x).is_integer() else x
+
+
 async def log_stats(paths: list[str], extract: str, where: str | None = None,
-                    window: dict | None = None, top: int = 20) -> dict:
+                    window: dict | None = None, top: int = 20, bucket: float | None = None) -> dict:
     """Распределение значений по логу: фильтр и счёт делает код, не модель."""
     if (denied := _refuse_unreadable(paths)) is not None:
         return denied
@@ -142,6 +159,13 @@ async def log_stats(paths: list[str], extract: str, where: str | None = None,
     if rx_win is not None and rx_win.groups != 1:
         return {"error": "`window.pattern` должен содержать ровно одну группу с числом, "
                          r'например "\"ts\":([0-9.]+)"'}
+
+    if bucket is not None:
+        if window is None:
+            return {"error": "bucket работает только с window: без границ нечем нарезать корзины"}
+        if (window["max"] - window["min"]) / bucket > _MAX_BUCKETS:
+            return {"error": f"слишком много корзин (больше {_MAX_BUCKETS}) — увеличь bucket "
+                             "или сузь window"}
 
     size, problem = await _total_size(paths)
     if problem:
@@ -159,7 +183,7 @@ async def log_stats(paths: list[str], extract: str, where: str | None = None,
     stats = await asyncio.to_thread(
         _count, text, rx, rx_where, rx_win,
         float(window["min"]) if window else 0.0,
-        float(window["max"]) if window else 0.0, top,
+        float(window["max"]) if window else 0.0, top, bucket,
     )
     return {"files": paths, "bytes": size, **stats}
 
@@ -173,7 +197,9 @@ def build_tools() -> list[Tool]:
              "Count a distribution over log FILES on the host: how many times each value of "
              "`extract` occurs, optionally only on lines matching `where` and inside a numeric "
              "`window` (e.g. a unix-time range). Reading, filtering and counting happen outside "
-             "the model — one call replaces a series of greps. Rotated `.gz` archives are read as is. Every answer carries a real `sample` "
+             "the model — one call replaces a series of greps. With `window`, `bucket` also returns counts "
+             "per time bucket in one call (e.g. bucket=3600 for hourly) — do not issue one call per hour. "
+             "Rotated `.gz` archives are read as is. Every answer carries a real `sample` "
              "line: fix your regex against it instead of guessing. Safe, read-only.",
              LogStatsParams, log_stats, Safety.SAFE),
     ]
