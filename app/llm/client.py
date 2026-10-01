@@ -113,7 +113,10 @@ def _log_call(model: str, resp, usage: Usage, ms: int) -> None:
     долго ли он шёл и не обрезан ли по длине (обрезанный JSON аргументов)."""
     finish = getattr(resp.choices[0], "finish_reason", None)
     details = getattr(getattr(resp, "usage", None), "completion_tokens_details", None)
-    fields = dict(model=model, ms=ms, prompt=usage.prompt_tokens,
+    # Провайдер — нестандартное поле OpenRouter. Скорость задаёт именно он, а не
+    # модель: у одной deepseek разброс 20–300 ток/с между провайдерами (И7, 02.10).
+    fields = dict(model=model, provider=getattr(resp, "provider", None),
+                  ms=ms, prompt=usage.prompt_tokens,
                   completion=usage.completion_tokens,
                   reasoning=getattr(details, "reasoning_tokens", None),
                   cached=usage.cached_tokens, finish=finish)

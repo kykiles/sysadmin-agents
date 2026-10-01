@@ -102,6 +102,21 @@ async def test_chat_logs_duration_tokens_and_finish_reason():
     assert entry["model"] == "m" and entry["finish"] == "stop"
     assert entry["prompt"] == 120 and entry["completion"] == 8 and entry["reasoning"] == 5
     assert isinstance(entry["ms"], int)
+    assert entry["provider"] is None  # не OpenRouter — поля нет, ход не падает
+
+
+async def test_chat_logs_openrouter_provider():
+    """Скорость задаёт провайдер, а не модель: без него в журнале не видно, что
+    OpenRouter увёл запросы на медленный (И7)."""
+    client = LLMClient(api_key="k", base_url="http://x", model="m")
+    fake_msg = type("M", (), {"content": "hi", "tool_calls": None})()
+    choice = type("C", (), {"message": fake_msg, "finish_reason": "stop"})()
+    resp = type("R", (), {"choices": [choice], "provider": "Baidu"})()
+    with capture_logs() as logs, patch.object(client._client.chat.completions, "create",
+                                              new=AsyncMock(return_value=resp)):
+        await client.chat([{"role": "user", "content": "hello"}])
+    [entry] = [e for e in logs if e["event"] == "llm_call"]
+    assert entry["provider"] == "Baidu"
 
 
 async def test_chat_warns_when_answer_cut_by_length():
