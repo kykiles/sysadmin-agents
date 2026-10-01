@@ -1,6 +1,9 @@
 import json
+import shutil
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
+import pytest
 
 import skills.remnawave.tools as rt
 from app.tools.base import Safety
@@ -198,3 +201,68 @@ def test_mutation_script_rejects_uuid():
     )
     assert proc.returncode == 1
     assert "числовой id" in proc.stdout
+
+
+needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="нет jq")
+
+DEVICES = json.dumps({"response": {"total": 4, "devices": [
+    {"userId": 1, "hwid": "a"}, {"userId": 2, "hwid": "b"},
+    {"userId": 2, "hwid": "c"}, {"userId": 3, "hwid": "d"}]}})
+
+
+def _panel(monkeypatch, stdout: str, returncode: int = 0):
+    _canary_settings(monkeypatch)
+
+    async def shell(argv, input=None):
+        return {"command": argv, "returncode": returncode, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(rt, "shell_exec", shell)
+
+
+@needs_jq
+async def test_curl_read_jq_returns_only_aggregate(monkeypatch):
+    """Журнал 01.10: 329 устройств не влезали в обрезку вывода, агент считал в уме 15 минут."""
+    _panel(monkeypatch, DEVICES)
+    out = await rt.rw_curl_read(
+        "GET", "/api/hwid/devices?size=1000",
+        jq=".response.devices | group_by(.userId) | map({u: .[0].userId, n: length}) "
+           "| sort_by(-.n) | .[0]")
+    assert out["returncode"] == 0
+    assert json.loads(out["stdout"]) == {"u": 2, "n": 2}
+    assert "devices" not in out["stdout"]  # сырого ответа в результате нет
+
+
+@needs_jq
+async def test_curl_read_jq_cannot_read_env(monkeypatch):
+    """Фильтр пишет модель: `$ENV` не должен отдать ей ключ панели и секреты контейнера."""
+    _panel(monkeypatch, "{}")
+    monkeypatch.setenv("LLM_API_KEY", "LEAKED_LLM_KEY")
+    out = await rt.rw_curl_read("GET", "/api/nodes", jq="$ENV")
+    assert out["returncode"] == 0 and json.loads(out["stdout"]) == {}
+    assert "LEAKED_LLM_KEY" not in json.dumps(out)
+
+
+@needs_jq
+async def test_curl_read_jq_error_is_reported(monkeypatch):
+    _panel(monkeypatch, DEVICES)
+    out = await rt.rw_curl_read("GET", "/api/hwid/devices", jq=".[")
+    assert out["returncode"] != 0 and out["stderr"]
+
+
+async def test_curl_read_jq_skipped_when_curl_failed(monkeypatch):
+    _panel(monkeypatch, "", returncode=28)
+    jq = AsyncMock()
+    monkeypatch.setattr(rt, "_jq", jq)
+    out = await rt.rw_curl_read("GET", "/api/nodes", jq=".")
+    assert out["returncode"] == 28
+    jq.assert_not_called()
+
+
+async def test_curl_read_tool_accepts_jq(monkeypatch):
+    _panel(monkeypatch, "{}")
+    jq = AsyncMock(return_value={"returncode": 0, "stdout": "1", "stderr": ""})
+    monkeypatch.setattr(rt, "_jq", jq)
+    tool = next(t for t in rt.build_tools() if t.name == "rw_curl_read")
+    out = json.loads(await tool.execute({"method": "GET", "path": "/api/nodes", "jq": "length"}))
+    assert out["stdout"] == "1" and out["jq"] == "length"
+    jq.assert_awaited_once_with("length", "{}")

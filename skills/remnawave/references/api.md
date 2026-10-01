@@ -23,6 +23,8 @@
 - `GET /api/users/<id>/accessible-nodes` — к каким нодам у клиента есть доступ (через сквады).
 - `GET /api/users/<id>/subscription-request-history` — последние 24 запроса подписки.
 - `GET /api/hwid/devices/<id>` → `{total, devices: [...]}`.
+- `GET /api/hwid/devices?size=1000&start=0` — устройства всех клиентов: `{total, devices: [...]}`,
+  у каждого `userId`. Без `size` отдаёт только 25.
 - `GET /api/nodes`, `GET /api/nodes/<uuid>`.
 - `GET /api/system/stats/nodes`, `GET /api/system/metadata` (версия панели).
 

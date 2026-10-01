@@ -106,10 +106,43 @@ async def _curl(method: str, path: str, body: dict | None) -> dict:
     return _hide_key(await shell_exec(args, input=config.encode()))
 
 
-async def rw_curl_read(method: str, path: str, body: dict | None = None) -> dict:
+class CurlReadParams(CurlParams):
+    jq: str | None = Field(default=None, description=(
+        "jq-фильтр к ответу: вернётся только его результат, а не весь JSON. Для подсчётов "
+        "и топов по спискам — считай фильтром, а не по ответу. Напр. "
+        "'.response.devices | group_by(.userId) | map({userId: .[0].userId, n: length}) "
+        "| sort_by(-.n) | .[:5]'"))
+
+
+async def _jq(flt: str, data: str) -> dict:
+    # Пустое окружение: фильтр пишет модель, а `$ENV` в jq отдал бы ей ключ панели и
+    # все секреты контейнера. Таймаут — от `repeat`/`range(1e18)` в фильтре.
+    proc = await asyncio.create_subprocess_exec(
+        "jq", "-c", flt,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE, env={},
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(data.encode()),
+                                          timeout=settings.remnawave_timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"returncode": None, "stdout": "", "stderr": "jq прерван по таймауту"}
+    return {"returncode": proc.returncode, "stdout": out.decode(errors="replace").strip(),
+            "stderr": err.decode(errors="replace").strip()}
+
+
+async def rw_curl_read(method: str, path: str, body: dict | None = None,
+                       jq: str | None = None) -> dict:
     if method.upper() != "GET":
         return {"error": f"{method} — мутация; используй rw_curl_write (с подтверждением)"}
-    return await _curl("GET", path, body)
+    res = await _curl("GET", path, body)
+    if not jq or res.get("returncode") != 0:
+        return res
+    # Сырой ответ не возвращаем: ради него фильтр и нужен — 300 устройств не влезают
+    # в обрезку вывода, и агент листал их по 10 и считал в уме (журнал 01.10).
+    return {"command": res.get("command"), "jq": jq, **_hide_key(await _jq(jq, res["stdout"]))}
 
 
 async def rw_curl_write(method: str, path: str, body: dict | None = None) -> dict:
@@ -122,6 +155,6 @@ def build_tools() -> list[Tool]:
     return [
         Tool("rw_query", "Run a READ-ONLY remnawave panel script (user-find, user-get, user-traffic, user-devices, user-history, nodes). Safe, auto-executed.", ScriptParams, rw_query, Safety.SAFE),
         Tool("rw_action", "Run a remnawave MUTATION script (user-extend, user-enable, user-disable, user-revoke, user-reset-traffic, hwid-reset). DESTRUCTIVE, changes a paying customer's subscription. Requires user confirmation.", ScriptParams, rw_action, Safety.DANGEROUS),
-        Tool("rw_curl_read", "Raw GET to the remnawave panel API by PATH (host is fixed from config). Safe, auto-executed. Use for endpoints not covered by the ready scripts.", CurlParams, rw_curl_read, Safety.SAFE),
+        Tool("rw_curl_read", "Raw GET to the remnawave panel API by PATH (host is fixed from config). Safe, auto-executed. Use for endpoints not covered by the ready scripts. For counts, tops and aggregates over lists pass `jq` and fetch the whole list in one page (size=1000).", CurlReadParams, rw_curl_read, Safety.SAFE),
         Tool("rw_curl_write", "Raw POST/PATCH/DELETE to the remnawave panel API by PATH. DESTRUCTIVE, changes panel state. Requires user confirmation.", CurlParams, rw_curl_write, Safety.DANGEROUS),
     ]
