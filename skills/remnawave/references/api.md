@@ -15,6 +15,8 @@
 
 ## Чтение (GET)
 - `GET /api/users?size=100&start=0` → `{response: {total, users: [...]}}`; `size` до 1000.
+  Трафик и в списке лежит во вложенном `userTraffic` (см. карточку ниже); `usedTrafficBytes`
+  на верхнем уровне клиента — всегда `null`.
 - Поиск по полю — `filters` (URL-кодированный JSON):
   `GET /api/users?filters=[{"id":"telegramId","value":"923973582"}]`.
 - `GET /api/users/by-username/<username>`, `GET /api/users/by-short-uuid/<shortUuid>`.
@@ -22,9 +24,14 @@
   `lifetimeUsedTrafficBytes`, `onlineAt`, `firstConnectedAt`, `lastConnectedNodeUuid`.
 - `GET /api/users/<id>/accessible-nodes` — к каким нодам у клиента есть доступ (через сквады).
 - `GET /api/users/<id>/subscription-request-history` — последние 24 запроса подписки.
-- `GET /api/hwid/devices/<id>` → `{total, devices: [...]}`.
-- `GET /api/hwid/devices?size=1000&start=0` — устройства всех клиентов: `{total, devices: [...]}`,
-  у каждого `userId`. Без `size` отдаёт только 25.
+- `GET /api/hwid/devices/<id>` → `{response: {total, devices: [...]}}`.
+- `GET /api/hwid/devices?size=1000&start=0` — устройства всех клиентов:
+  `{response: {total, devices: [...]}}`, у каждого `userId`, `platform`, `userAgent`
+  (`Happ/4.11.0/ios`). Без `size` отдаёт только 25.
+
+Пути для `jq`: `.response.users[]`, `.response.devices[]`,
+`.response.users[].userTraffic.usedTrafficBytes`. Например, устройств по клиентам:
+`.response.devices | group_by(.userId) | map({userId: .[0].userId, n: length}) | sort_by(-.n)`.
 - `GET /api/nodes`, `GET /api/nodes/<uuid>`.
 - `GET /api/system/stats/nodes`, `GET /api/system/metadata` (версия панели).
 
