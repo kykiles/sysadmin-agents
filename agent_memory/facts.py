@@ -2,7 +2,7 @@ import math
 import re
 import sqlite3
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from agent_memory.store import SqliteStore
 from agent_memory.text import fold, stem
@@ -59,6 +59,9 @@ KINDS = ("stable", "snapshot", *KIND_LABELS)
 # Директор видит в оглавлении только ключ и 23.09 затёр такой факт своей бедной
 # версией, так что поверх них его запись идёт владельцу на проверку.
 HUMAN_ORIGINS = ("owner", "consolidation", "quarantine")
+
+# Сколько дней новый факт держится в начале оглавления, пока копит обращения.
+FRESH_DAYS = 7
 
 
 def _stems(text: str) -> set[str]:
@@ -356,11 +359,18 @@ class KnowledgeStore(SqliteStore):
         значения; описание подсказывает, когда факт пригодится, если формулировка
         задачи с ключом не совпадает. Порядок задаёт силу: что не используется,
         уезжает в хвост и первым вылетает за бюджет промпта.
+
+        Свежие (неделя) и записанные человеком идут впереди: обращения копит только
+        тот факт, который виден, — без этого новый факт не попадал в оглавление
+        никогда (02.10, факт владельца о деплое degulator).
         """
+        fresh = (datetime.now(timezone.utc) - timedelta(days=FRESH_DAYS)).isoformat()
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT scope, key, description, kind FROM facts WHERE valid_until IS NULL "
-                "ORDER BY hits DESC, last_used DESC, valid_from DESC"
+                f"ORDER BY (valid_from >= ? OR origin IN ({', '.join('?' * len(HUMAN_ORIGINS))})) "
+                "DESC, hits DESC, last_used DESC, valid_from DESC",
+                (fresh, *HUMAN_ORIGINS),
             ).fetchall()
         # rank — место по силе среди всех фактов, а не внутри области: по нему бюджет
         # оглавления раздаётся через все области сразу.

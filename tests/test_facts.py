@@ -262,6 +262,23 @@ def test_index_puts_used_facts_first(tmp_path):
     assert area["facts"][1]["description"] == "редкий"
 
 
+def test_index_lifts_fresh_and_human_facts_without_hits(tmp_path):
+    """02.10: факт владельца с нулём обращений не влезал в бюджет оглавления, а
+    без места в оглавлении его не припоминают — и обращения не растут никогда."""
+    s = _store(tmp_path)
+    s.remember("host", "old_hot", "v")
+    s.touch([("host", "old_hot")] * 3)
+    s.remember("host", "old_cold", "v")
+    s.remember("deploy", "owner_old", "v", origin="owner")
+    s.remember("tls", "fresh", "v")
+    with s._connect() as conn:
+        conn.execute("UPDATE facts SET valid_from = '2026-01-01T00:00:00+00:00' "
+                     "WHERE key != 'fresh'")
+
+    ranks = {f["key"]: f["rank"] for area in s.index() for f in area["facts"]}
+    assert ranks == {"fresh": 0, "owner_old": 1, "old_hot": 2, "old_cold": 3}
+
+
 def test_similar_finds_duplicate_under_another_key(tmp_path):
     s = _store(tmp_path)
     s.remember("bot", "dialog_db", "история диалога лежит в /data/dialog.db")
