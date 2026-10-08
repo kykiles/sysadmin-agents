@@ -28,6 +28,7 @@ async def main() -> None:
         model=settings.llm_model,
         timeout=settings.llm_timeout_seconds,
         max_retries=settings.llm_max_retries,
+        provider_ignore=[p.strip() for p in settings.llm_provider_ignore.split(",") if p.strip()],
     )
     # Временные агенты, монитор и консолидация остаются на LLM_MODEL.
     director_llm = LLMClient(

@@ -57,10 +57,16 @@ class ChoiceMessage:
 
 class LLMClient:
     def __init__(self, api_key: str, base_url: str, model: str,
-                 timeout: float = 360, max_retries: int = 1):
+                 timeout: float = 360, max_retries: int = 1,
+                 provider_ignore: list[str] | None = None):
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url,
                                    timeout=timeout, max_retries=max_retries)
         self._model = model
+        self._extra_body: dict = {"usage": {"include": True}}
+        # OpenRouter: провайдеры, к которым не ходить. Cohere под :nitro почти не
+        # кэширует и съедал ~60% трат агентов (разбор 09.10.2026).
+        if provider_ignore:
+            self._extra_body["provider"] = {"ignore": provider_ignore}
 
     async def chat(
         self, messages: list[dict], tools: list[dict] | None = None,
@@ -83,7 +89,7 @@ class LLMClient:
                     tool_choice=tool_choice if tools and tool_choice else NOT_GIVEN,
                     # Без этого OpenRouter вернёт только токены, а цену ходов
                     # пришлось бы считать по прайсу модели вручную.
-                    extra_body={"usage": {"include": True}},
+                    extra_body=self._extra_body,
                 )
                 break
             except APIError as e:

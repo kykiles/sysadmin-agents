@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     # агенты гоняют длинные циклы с инструментами — модели им нужны разные по цене.
     # Пусто — Директор на LLM_MODEL, как все.
     director_llm_model: str = Field(default="", alias="DIRECTOR_LLM_MODEL")
+    # Провайдеры OpenRouter для LLM_MODEL, к которым не ходить, через запятую.
+    llm_provider_ignore: str = Field(default="", alias="LLM_PROVIDER_IGNORE")
     # Дефолт SDK — 600 с × 2 повтора: зависший ход deepseek держал задачу 10+ минут.
     # Рабочий ход агента бывает до ~280 с, поэтому меньше 360 не ставить.
     llm_timeout_seconds: float = Field(default=360, alias="LLM_TIMEOUT_SECONDS")

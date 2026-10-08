@@ -128,3 +128,22 @@ async def test_chat_warns_when_answer_cut_by_length():
                                               new=AsyncMock(return_value=type("R", (), {"choices": [choice]})())):
         await client.chat([{"role": "user", "content": "hello"}])
     assert [e["log_level"] for e in logs if e["event"] == "llm_call_truncated"] == ["warning"]
+
+
+async def test_provider_ignore_reaches_openrouter():
+    """Cohere под :nitro почти не кэширует и съедал ~60% трат — его исключаем."""
+    client = LLMClient(api_key="k", base_url="http://x", model="m", provider_ignore=["Cohere"])
+    fake_msg = type("M", (), {"content": "hi", "tool_calls": None})()
+    create = AsyncMock(return_value=_resp(fake_msg))
+    with patch.object(client._client.chat.completions, "create", new=create):
+        await client.chat([{"role": "user", "content": "x"}])
+    assert create.await_args.kwargs["extra_body"]["provider"] == {"ignore": ["Cohere"]}
+
+
+async def test_no_provider_block_without_ignore():
+    client = LLMClient(api_key="k", base_url="http://x", model="m")
+    fake_msg = type("M", (), {"content": "hi", "tool_calls": None})()
+    create = AsyncMock(return_value=_resp(fake_msg))
+    with patch.object(client._client.chat.completions, "create", new=create):
+        await client.chat([{"role": "user", "content": "x"}])
+    assert "provider" not in create.await_args.kwargs["extra_body"]
