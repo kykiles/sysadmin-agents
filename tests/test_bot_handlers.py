@@ -462,3 +462,25 @@ async def test_answer_falls_back_to_html_when_rich_fails():
     msg.bot.send_rich_message = AsyncMock(side_effect=RuntimeError("bad request"))
     await _task_handler("**итог**")(msg)
     msg.answer.assert_awaited_once_with("<b>итог</b>")
+
+
+async def test_long_learn_review_is_split_with_buttons_on_last_part(monkeypatch):
+    """Сводка /learn длиннее лимита Telegram уходит частями, а не падает (журнал 11.10)."""
+    import app.bot.handlers as handlers
+    from app.learning.review import ReviewOutcome
+
+    suggested = [{"scope": "host", "key": f"k{i}", "value": "длинное значение " * 20,
+                  "kind": "stable", "sid": f"s{i}"} for i in range(30)]
+    monkeypatch.setattr(handlers, "run_review", AsyncMock(return_value=ReviewOutcome(suggested=suggested)))
+    monkeypatch.setattr(handlers, "review_markup", lambda outcome: "MARKUP")
+    router = _router(learning=MagicMock())
+    learn = next(h.callback for h in router.message.handlers if h.callback.__name__ == "_learn")
+    message = MagicMock()
+    message.answer = AsyncMock()
+
+    await learn(message)
+
+    calls = message.answer.call_args_list
+    assert len(calls) > 1
+    assert all(len(c.args[0]) <= 4096 for c in calls)
+    assert [c.kwargs.get("reply_markup") for c in calls] == [None] * (len(calls) - 1) + ["MARKUP"]

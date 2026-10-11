@@ -126,9 +126,12 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         if outcome.is_empty:
             await message.answer("Нечего предложить: устаревших фактов не нашёл.")
             return
-        await message.answer(
-            render_answer(render_review(outcome)), reply_markup=review_markup(outcome)
-        )
+        # Длинная сводка одним сообщением падала на лимите Telegram. Кнопки — на
+        # последней части; запас под строки «• Записано: …», которые дописывает нажатие.
+        *head, last = split_message(render_review(outcome), limit=3400)
+        for part in head:
+            await message.answer(render_answer(part))
+        await message.answer(render_answer(last), reply_markup=review_markup(outcome))
 
     @router.callback_query(F.data.startswith("sf:"))
     async def _remember_suggested(callback: CallbackQuery):
