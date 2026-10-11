@@ -75,7 +75,7 @@ async def main() -> None:
         state = MonitorState(settings.monitor_db_path)
         monitor_task = asyncio.create_task(
             health_loop(llm, bot, settings.telegram_user_id, state,
-                        config_from_settings(), learning)
+                        config_from_settings())
         )
 
     log.info("startup", model=settings.llm_model,

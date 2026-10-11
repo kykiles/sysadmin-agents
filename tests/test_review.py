@@ -9,8 +9,6 @@ from agent_memory.lint import LintState, StaleFact
 from app.learning.review import (
     LearningContext, ReviewOutcome, mark_shown, render_review, resolve_fact, run_review, short_id,
 )
-from app.monitoring.loop import MonitorConfig, run_tick
-from app.monitoring.state import MonitorState
 
 
 def _ctx(tmp_path) -> LearningContext:
@@ -94,61 +92,6 @@ def test_callback_data_fits_telegram_limit():
     """64 байта — жёсткий лимит Telegram: длинный ключ не должен его пробить."""
     sid = short_id("очень длинное название области знаний " * 5)
     assert len(f"lf:{sid}:del".encode()) <= 64
-
-
-# ---------- тик мониторинга ----------
-
-async def _tick(tmp_path, cfg, learning, tick=0):
-    bot = MagicMock()
-    bot.send_message = AsyncMock()
-    state = MonitorState(str(tmp_path / "mon.db"))
-    from app.monitoring import loop as loop_mod
-    orig = loop_mod.run_checks
-
-    async def _no_checks(t, c):
-        return []
-
-    loop_mod.run_checks = _no_checks
-    try:
-        await run_tick(MagicMock(), bot, 1, state, cfg, tick, learning)
-    finally:
-        loop_mod.run_checks = orig
-    return bot
-
-
-@pytest.mark.asyncio
-async def test_learning_is_off_when_every_ticks_is_zero(tmp_path):
-    ctx = _ctx(tmp_path)
-    _seed_stale_fact(ctx)
-
-    bot = await _tick(tmp_path, MonitorConfig(interval=300, disk_pct=90, mem_min_mb=1,
-                                              load_per_cpu=1, learn_every_ticks=0), ctx)
-
-    bot.send_message.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_learning_runs_on_matching_tick(tmp_path):
-    ctx = _ctx(tmp_path)
-    _seed_stale_fact(ctx)
-    cfg = MonitorConfig(interval=300, disk_pct=90, mem_min_mb=1, load_per_cpu=1,
-                        learn_every_ticks=2)
-
-    quiet = await _tick(tmp_path, cfg, ctx, tick=1)
-    loud = await _tick(tmp_path, cfg, ctx, tick=2)
-
-    quiet.send_message.assert_not_called()
-    assert "Устаревшие знания" in loud.send_message.call_args[0][1]
-
-
-@pytest.mark.asyncio
-async def test_silent_when_nothing_found(tmp_path):
-    cfg = MonitorConfig(interval=300, disk_pct=90, mem_min_mb=1, load_per_cpu=1,
-                        learn_every_ticks=1)
-
-    bot = await _tick(tmp_path, cfg, _ctx(tmp_path), tick=1)
-
-    bot.send_message.assert_not_called()
 
 
 async def test_review_shows_quarantined_facts_with_buttons(tmp_path):

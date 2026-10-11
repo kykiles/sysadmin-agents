@@ -1,10 +1,8 @@
 import asyncio
 from dataclasses import dataclass, field
 
-from app.bot.keyboards import review_markup
 from app.bot.render import render_answer
 from app.config import settings
-from app.learning.review import mark_shown, render_review, run_review
 from app.logging import get_logger
 from app.monitoring.checks import (
     CheckResult, check_disk, check_memory, check_load,
@@ -27,7 +25,6 @@ class MonitorConfig:
     tls_endpoints: list[str] = field(default_factory=list)
     tls_warn_days: int = 14
     tls_every_ticks: int = 12
-    learn_every_ticks: int = 0
     fail_streak: int = 2
 
 
@@ -46,7 +43,6 @@ def config_from_settings() -> MonitorConfig:
         tls_endpoints=_csv(settings.monitor_tls_endpoints),
         tls_warn_days=settings.monitor_tls_warn_days,
         tls_every_ticks=settings.monitor_tls_every_ticks,
-        learn_every_ticks=settings.learn_every_ticks,
         fail_streak=settings.monitor_fail_streak,
     )
 
@@ -67,18 +63,7 @@ async def run_checks(tick: int, cfg: MonitorConfig) -> list[CheckResult]:
     return results
 
 
-async def _run_learning(bot, chat_id, learning) -> None:
-    outcome = await run_review(learning)
-    if outcome.is_empty:
-        return
-    await bot.send_message(
-        chat_id, render_answer(render_review(outcome)), reply_markup=review_markup(outcome)
-    )
-    mark_shown(learning, outcome)
-
-
-async def run_tick(llm, bot, chat_id, state: MonitorState, cfg: MonitorConfig, tick: int,
-                   learning=None) -> None:
+async def run_tick(llm, bot, chat_id, state: MonitorState, cfg: MonitorConfig, tick: int) -> None:
     results = await run_checks(tick, cfg)
     prev = state.load_prev()
     new: dict[str, tuple[bool, int]] = {}
@@ -101,18 +86,15 @@ async def run_tick(llm, bot, chat_id, state: MonitorState, cfg: MonitorConfig, t
             announced = False
         new[r.name] = (announced, fails)
     state.save(new)
-    if learning is not None and cfg.learn_every_ticks > 0 and tick % cfg.learn_every_ticks == 0:
-        await _run_learning(bot, chat_id, learning)
 
 
-async def health_loop(llm, bot, chat_id, state: MonitorState, cfg: MonitorConfig,
-                      learning=None) -> None:
+async def health_loop(llm, bot, chat_id, state: MonitorState, cfg: MonitorConfig) -> None:
     log.info("monitor_start", interval=cfg.interval, containers=cfg.containers,
              tls=cfg.tls_endpoints, remnawave=cfg.remnawave_enabled)
     tick = 0
     while True:
         try:
-            await run_tick(llm, bot, chat_id, state, cfg, tick, learning)
+            await run_tick(llm, bot, chat_id, state, cfg, tick)
         except Exception:
             log.exception("monitor_tick_failed", tick=tick)
         tick += 1
