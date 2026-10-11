@@ -32,6 +32,9 @@
 Пути для `jq`: `.response.users[]`, `.response.devices[]`,
 `.response.users[].userTraffic.usedTrafficBytes`. Например, устройств по клиентам:
 `.response.devices | group_by(.userId) | map({userId: .[0].userId, n: length}) | sort_by(-.n)`.
+Даты (`expireAt`, `createdAt`) — строки вида `2026-10-14T07:44:00.000Z`. `fromdateiso8601` на
+них падает из-за миллисекунд — сравнивай строки как есть. Истекают до конца октября:
+`[.response.users[] | select(.status == "ACTIVE" and .expireAt < "2026-11-01")] | sort_by(.expireAt) | {count: length, users: map({id, username, expireAt})}`.
 - `GET /api/nodes`, `GET /api/nodes/<uuid>`.
 - `GET /api/system/stats/nodes`, `GET /api/system/metadata` (версия панели).
 
