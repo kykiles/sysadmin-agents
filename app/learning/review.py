@@ -50,7 +50,6 @@ async def run_review(ctx: LearningContext) -> ReviewOutcome:
             remind_days=settings.lint_remind_days,
             max_items=settings.lint_max_items,
         )
-        ctx.lint.mark_reported(stale, datetime.now(timezone.utc))
     except Exception:
         log.exception("lint_pass_failed")
 
@@ -67,6 +66,15 @@ async def run_review(ctx: LearningContext) -> ReviewOutcome:
     ctx.pending = {short_id(p["scope"], p["key"]): p for p in suggested}
     return ReviewOutcome(stale=stale, tainted=ctx.facts.proposals()[:settings.lint_max_items],
                          suggested=suggested)
+
+
+def mark_shown(ctx: LearningContext, outcome: ReviewOutcome) -> None:
+    """Помечать устаревшее показанным — только после отправки: 11.10 сводка упала
+    на лимите Telegram, а пометка уже стояла, и 10 фактов на 30 дней пропали из виду."""
+    try:
+        ctx.lint.mark_reported(outcome.stale, datetime.now(timezone.utc))
+    except Exception:
+        log.exception("lint_mark_failed")
 
 
 def resolve_fact(facts, sid: str) -> tuple[str, str] | None:

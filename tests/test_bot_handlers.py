@@ -473,14 +473,33 @@ async def test_long_learn_review_is_split_with_buttons_on_last_part(monkeypatch)
                   "kind": "stable", "sid": f"s{i}"} for i in range(30)]
     monkeypatch.setattr(handlers, "run_review", AsyncMock(return_value=ReviewOutcome(suggested=suggested)))
     monkeypatch.setattr(handlers, "review_markup", lambda outcome: "MARKUP")
-    router = _router(learning=MagicMock())
+    learning = MagicMock()
+    router = _router(learning=learning)
     learn = next(h.callback for h in router.message.handlers if h.callback.__name__ == "_learn")
     message = MagicMock()
     message.answer = AsyncMock()
 
     await learn(message)
+    learning.lint.mark_reported.assert_called_once()
 
     calls = message.answer.call_args_list
     assert len(calls) > 1
     assert all(len(c.args[0]) <= 4096 for c in calls)
     assert [c.kwargs.get("reply_markup") for c in calls] == [None] * (len(calls) - 1) + ["MARKUP"]
+
+
+async def test_learn_marks_stale_only_after_sending(monkeypatch):
+    """Не ушло сообщение — устаревшее не помечается показанным (журнал 11.10)."""
+    import app.bot.handlers as handlers
+    from app.learning.review import ReviewOutcome
+    monkeypatch.setattr(handlers, "run_review", AsyncMock(return_value=ReviewOutcome(suggested=[
+        {"scope": "s", "key": "k", "value": "v", "kind": "stable"}])))
+    learning = MagicMock()
+    router = _router(learning=learning)
+    learn = next(h.callback for h in router.message.handlers if h.callback.__name__ == "_learn")
+    message = MagicMock()
+    message.answer = AsyncMock(side_effect=RuntimeError("message is too long"))
+
+    with pytest.raises(RuntimeError):
+        await learn(message)
+    learning.lint.mark_reported.assert_not_called()

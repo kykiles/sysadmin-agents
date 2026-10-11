@@ -7,7 +7,7 @@ import pytest
 from agent_memory.facts import KnowledgeStore
 from agent_memory.lint import LintState, StaleFact
 from app.learning.review import (
-    LearningContext, ReviewOutcome, render_review, resolve_fact, run_review, short_id,
+    LearningContext, ReviewOutcome, mark_shown, render_review, resolve_fact, run_review, short_id,
 )
 from app.monitoring.loop import MonitorConfig, run_tick
 from app.monitoring.state import MonitorState
@@ -50,9 +50,20 @@ async def test_second_pass_is_quiet(tmp_path):
     ctx = _ctx(tmp_path)
     _seed_stale_fact(ctx)
 
-    await run_review(ctx)
+    mark_shown(ctx, await run_review(ctx))
 
     assert (await run_review(ctx)).is_empty
+
+
+@pytest.mark.asyncio
+async def test_unsent_review_shows_stale_again(tmp_path):
+    """Сводка не дошла (11.10: лимит Telegram) — устаревшее не должно пропасть на 30 дней."""
+    ctx = _ctx(tmp_path)
+    _seed_stale_fact(ctx)
+
+    await run_review(ctx)
+
+    assert [f.key for f in (await run_review(ctx)).stale] == ["ssh_port"]
 
 
 # ---------- рендер ----------

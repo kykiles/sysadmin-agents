@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from app.bot.keyboards import review_markup
 from app.bot.render import render_answer
 from app.config import settings
-from app.learning.review import render_review, run_review
+from app.learning.review import mark_shown, render_review, run_review
 from app.logging import get_logger
 from app.monitoring.checks import (
     CheckResult, check_disk, check_memory, check_load,
@@ -74,6 +74,7 @@ async def _run_learning(bot, chat_id, learning) -> None:
     await bot.send_message(
         chat_id, render_answer(render_review(outcome)), reply_markup=review_markup(outcome)
     )
+    mark_shown(learning, outcome)
 
 
 async def run_tick(llm, bot, chat_id, state: MonitorState, cfg: MonitorConfig, tick: int,

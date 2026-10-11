@@ -11,7 +11,7 @@ from app.bot.filters import OwnerCallbackFilter, WhitelistFilter
 from app.config import settings
 from app.bot.keyboards import review_markup
 from app.bot.render import render_answer, split_message
-from app.learning.review import render_review, resolve_fact, run_review
+from app.learning.review import mark_shown, render_review, resolve_fact, run_review
 from app.logging import get_logger
 
 log = get_logger("handlers")
@@ -132,6 +132,7 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         for part in head:
             await message.answer(render_answer(part))
         await message.answer(render_answer(last), reply_markup=review_markup(outcome))
+        mark_shown(learning, outcome)
 
     @router.callback_query(F.data.startswith("sf:"))
     async def _remember_suggested(callback: CallbackQuery):
