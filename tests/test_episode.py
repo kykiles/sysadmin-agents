@@ -178,3 +178,44 @@ async def test_successful_read_does_not_forgive_write_error():
 async def test_denied_read_tool_without_twin_stays_partial():
     ep = await _run([_tool("ssh_query", {"error": "нет в NETWORK_ALLOWED"})], [_call("ssh_query")])
     assert ep.outcome() == "partial"
+
+
+# ---------- судья partial: выполненная задача с обойдённой ошибкой — не partial ----------
+
+class _JudgeLLM:
+    def __init__(self, reply=None, error=None):
+        self.reply, self.error, self.calls = reply, error, []
+
+    async def chat(self, messages, tools=None):
+        self.calls.append(messages)
+        if self.error:
+            raise self.error
+        return ChoiceMessage(content=self.reply, tool_calls=None)
+
+
+async def test_judge_turns_fulfilled_partial_into_ok():
+    from app.agents.episode import judge_partial
+    llm = _JudgeLLM("1: да; 2: нет")
+    out = await judge_partial(llm, "partial", "дай отчёт по пользователю", "отчёт: ...",
+                              ["ошибка mark_step: пункт 5 не твой"])
+    assert out == "ok"
+    assert "ошибка mark_step" in llm.calls[0][0]["content"]
+
+
+@pytest.mark.parametrize("reply", ["1: нет; 2: да", "не знаю", ""])
+async def test_judge_keeps_partial_unless_clearly_fulfilled(reply):
+    from app.agents.episode import judge_partial
+    assert await judge_partial(_JudgeLLM(reply), "partial", "q", "a", ["p"]) == "partial"
+
+
+async def test_judge_keeps_partial_when_llm_fails():
+    from app.agents.episode import judge_partial
+    assert await judge_partial(_JudgeLLM(error=RuntimeError("503")), "partial", "q", "a", ["p"]) == "partial"
+
+
+@pytest.mark.parametrize("outcome", ["ok", "failed"])
+async def test_judge_does_not_touch_ok_and_failed(outcome):
+    from app.agents.episode import judge_partial
+    llm = _JudgeLLM("1: да; 2: нет")
+    assert await judge_partial(llm, outcome, "q", "a", []) == outcome
+    assert llm.calls == []

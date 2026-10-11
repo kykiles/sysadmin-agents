@@ -10,6 +10,10 @@
 """
 import json
 
+from app.logging import get_logger
+
+log = get_logger("episode")
+
 # Строки уходят в контекст Директора при recall_experience, поэтому эпизод —
 # короткая сводка, а не лог: подробности лежат в транскрипте задачи.
 MAX_PROBLEMS = 8
@@ -76,3 +80,41 @@ class Episode:
         if self._fatal:
             return "failed"
         return "partial" if self._problems or self._errors else "ok"
+
+
+# Правило выше ставит partial на любую оставшуюся проблему, а на журнале 20.09–11.10
+# так помечались и выполненные задачи (8 из 12 partial). Поэтому partial — и только
+# его — проверяет отдельный вызов модели по просьбе и итоговому ответу: это судья со
+# стороны, а не самоотчёт агента. Решает первый вопрос; второй держит модель от
+# «сообщил о неудаче — значит ответил»: без него неудачи проходили как выполненные.
+_JUDGE_PROMPT = """Агент выполнял просьбу пользователя, по ходу были служебные проблемы. Ответь на два вопроса про ответ агента.
+1. Ответ даёт именно запрошенные данные или сообщает, что запрошенное действие сделано?
+2. Агент сообщает, что получить запрошенное или выполнить действие не удалось (не найдено, нет доступа, ошибка)?
+Формат — ровно одна строка: «1: да/нет; 2: да/нет».
+
+Просьба:
+{request}
+
+Проблемы:
+{problems}
+
+Ответ агента:
+{answer}"""
+
+
+async def judge_partial(llm, outcome: str, request: str, answer: str,
+                        problems: list[str]) -> str:
+    """partial → ok, если просьба по факту выполнена; остальное без изменений."""
+    if outcome != "partial":
+        return outcome
+    prompt = _JUDGE_PROMPT.format(request=request[:1500], problems="\n".join(problems),
+                                  answer=answer[:3000])
+    try:
+        msg = await llm.chat([{"role": "user", "content": prompt}])
+    except Exception:
+        log.warning("outcome_judge_failed")
+        return outcome
+    verdict = (msg.content or "").strip().lower()
+    judged = "ok" if verdict.startswith("1: да") else outcome
+    log.info("outcome_judged", verdict=verdict[:40], outcome=judged)
+    return judged

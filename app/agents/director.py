@@ -14,7 +14,7 @@ import yaml
 from pydantic import BaseModel, Field
 from app.agents.base import Agent
 from app.agents.loader import compose_prompt
-from app.agents.episode import Episode
+from app.agents.episode import Episode, judge_partial
 from app.agents.messages import Task, Result
 from app.bot.reports import save_report
 from app.config import settings
@@ -757,6 +757,9 @@ class Director(Agent):
 
     async def _write_journal(self, task: Task, result: Result, duration_ms: int = 0) -> None:
         try:
+            outcome = await judge_partial(
+                self._llm, self._episode.outcome(), redact(task.content),
+                redact(result.final or result.content), self._episode.problems())
             await asyncio.to_thread(
                 self._journal.record,
                 task_id=task.id,
@@ -776,7 +779,7 @@ class Director(Agent):
                 duration_ms=duration_ms,
                 director_cached=result.usage.cached_tokens,
                 agents_cached=self._sub_usage.cached_tokens,
-                outcome=self._episode.outcome(),
+                outcome=outcome,
                 problems=[redact(p) for p in self._episode.problems()],
             )
             await asyncio.to_thread(
