@@ -17,7 +17,12 @@ def _valid_site(site: str) -> bool:
     return bool(site) and "/" not in site and ".." not in site
 
 
-def _choose_method(has_script: bool, has_make_deploy: bool, has_compose: bool) -> tuple[str, str]:
+def _choose_method(has_ship: bool, has_script: bool, has_make_deploy: bool,
+                   has_compose: bool) -> tuple[str, str]:
+    # ship.sh выкатывает новую версию (берёт свежий тег и сам зовёт deploy.sh);
+    # deploy.sh в одиночку лишь перезапускает уже стоящую версию.
+    if has_ship:
+        return "ship", "bash deployments/ship.sh"
     if has_script:
         return "script", "bash deployments/deploy.sh"
     if has_make_deploy:
@@ -34,17 +39,18 @@ async def _host_run(script: str) -> dict:
 async def _detect(site_dir: str) -> tuple[str, str]:
     q = shlex.quote(site_dir)
     probe = (
-        f"s=0; m=0; c=0; "
+        f"h=0; s=0; m=0; c=0; "
+        f"[ -f {q}/deployments/ship.sh ] && h=1; "
         f"[ -f {q}/deployments/deploy.sh ] && s=1; "
         f"grep -qE '^deploy:' {q}/Makefile 2>/dev/null && m=1; "
         f"{{ [ -f {q}/docker-compose.yml ] || [ -f {q}/compose.yaml ]; }} && c=1; "
-        f"echo ${{s}}${{m}}${{c}}"
+        f"echo ${{h}}${{s}}${{m}}${{c}}"
     )
     res = await _host_run(probe)
-    flags = (res.get("stdout") or "").strip()[-3:]
-    if len(flags) != 3:
+    flags = (res.get("stdout") or "").strip()[-4:]
+    if len(flags) != 4:
         return "none", ""
-    return _choose_method(flags[0] == "1", flags[1] == "1", flags[2] == "1")
+    return _choose_method(*(f == "1" for f in flags))
 
 
 async def deploy_plan(site: str) -> dict:
@@ -56,7 +62,7 @@ async def deploy_plan(site: str) -> dict:
     method, command = await _detect(site_dir)
     if method == "none":
         return {"site": site, "dir": site_dir, "method": "none",
-                "error": "способ деплоя не определён (нет deploy.sh / make deploy / compose)"}
+                "error": "способ деплоя не определён (нет ship.sh / deploy.sh / make deploy / compose)"}
     return {"site": site, "dir": site_dir, "method": method, "command": command}
 
 
@@ -69,7 +75,7 @@ async def deploy_run(site: str) -> dict:
     method, command = await _detect(site_dir)
     if method == "none":
         return {"site": site, "method": "none",
-                "error": "способ деплоя не определён (нет deploy.sh / make deploy / compose)"}
+                "error": "способ деплоя не определён (нет ship.sh / deploy.sh / make deploy / compose)"}
     script = f"cd {shlex.quote(site_dir)} && {command}"
     res = await _host_run(script)
     return {

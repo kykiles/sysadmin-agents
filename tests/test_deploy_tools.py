@@ -8,18 +8,30 @@ def _allow(monkeypatch, value):
     monkeypatch.setattr(dt, "settings", SimpleNamespace(deploy_allowed=value))
 
 
-def test_choose_method_prefers_script():
-    assert dt._choose_method(True, True, True) == ("script", "bash deployments/deploy.sh")
+def test_choose_method_prefers_ship():
+    # ship.sh выкатывает новую версию, deploy.sh лишь перезапускает текущую
+    assert dt._choose_method(True, True, True, True) == ("ship", "bash deployments/ship.sh")
+
+
+def test_choose_method_script_without_ship():
+    assert dt._choose_method(False, True, True, True) == ("script", "bash deployments/deploy.sh")
 
 
 def test_choose_method_make_then_compose():
-    assert dt._choose_method(False, True, True) == ("make", "make deploy")
-    assert dt._choose_method(False, False, True) == (
+    assert dt._choose_method(False, False, True, True) == ("make", "make deploy")
+    assert dt._choose_method(False, False, False, True) == (
         "compose", "git pull --ff-only && docker compose up -d --build")
 
 
 def test_choose_method_none():
-    assert dt._choose_method(False, False, False) == ("none", "")
+    assert dt._choose_method(False, False, False, False) == ("none", "")
+
+
+async def test_detect_reads_four_flags(monkeypatch):
+    monkeypatch.setattr(dt, "_host_run", AsyncMock(return_value={"stdout": "1100\n"}))
+    assert await dt._detect("/opt/glowshine") == ("ship", "bash deployments/ship.sh")
+    monkeypatch.setattr(dt, "_host_run", AsyncMock(return_value={"stdout": "0100\n"}))
+    assert await dt._detect("/opt/glowshine") == ("script", "bash deployments/deploy.sh")
 
 
 def test_valid_site():
