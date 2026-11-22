@@ -240,13 +240,107 @@ async def test_review_survives_broken_consolidation(tmp_path):
     llm = MagicMock()
     llm.chat = AsyncMock(side_effect=RuntimeError("апстрим лёг"))
     ctx = _ctx(tmp_path)
-    ctx.llm, ctx.journal = llm, MagicMock(recent_with_summary=lambda hours: [{"intent": "i", "summary": "s"}])
+    ctx.llm, ctx.journal = llm, MagicMock(since_with_summary=lambda since, limit: [
+        {"ts": "2026-11-22T00:00:00+00:00", "intent": "i", "summary": "s"}])
     _seed_stale_fact(ctx)
 
     outcome = await run_review(ctx)
 
     assert [f.key for f in outcome.stale] == ["ssh_port"]
     assert outcome.suggested == []
+
+
+# ---------- журнал читается с места прошлого разбора ----------
+
+def _journal_with_tasks(tmp_path, *intents):
+    from agent_memory.journal import TaskJournal
+
+    journal = TaskJournal(str(tmp_path / "tasks.db"))
+    for n, intent in enumerate(intents):
+        journal.record(task_id=str(n), chat_id="c", intent=intent, agents=[],
+                       tool_seq=[], iterations=1, success=True, summary="ок")
+    return journal
+
+
+def _empty_llm():
+    llm = MagicMock()
+    llm.chat = AsyncMock(return_value=MagicMock(content="[]"))
+    return llm
+
+
+def _prompt(llm) -> str:
+    return llm.chat.call_args.args[0][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_next_pass_starts_after_reviewed_tasks(tmp_path):
+    """12–21.11: окно в сутки теряло задачи, когда /learn запускали реже."""
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = _empty_llm(), _journal_with_tasks(tmp_path, "первая задача")
+    mark_shown(ctx, await run_review(ctx))
+
+    ctx.journal.record(task_id="new", chat_id="c", intent="вторая задача", agents=[],
+                       tool_seq=[], iterations=1, success=True, summary="ок")
+    await run_review(ctx)
+
+    assert "вторая задача" in _prompt(ctx.llm)
+    assert "первая задача" not in _prompt(ctx.llm)
+
+
+@pytest.mark.asyncio
+async def test_old_tasks_are_read_after_long_pause(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = _empty_llm(), _journal_with_tasks(tmp_path, "старая задача")
+    ctx.lint.set_consolidated_until("2000-01-01T00:00:00+00:00")
+    with ctx.journal._connect() as conn:  # задача старше окна CONSOLIDATE_HOURS
+        conn.execute("UPDATE tasks SET ts = '2026-01-01T00:00:00+00:00'")
+
+    await run_review(ctx)
+
+    assert "старая задача" in _prompt(ctx.llm)
+
+
+@pytest.mark.asyncio
+async def test_nothing_new_since_mark_skips_llm(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = _empty_llm(), _journal_with_tasks(tmp_path, "задача")
+    mark_shown(ctx, await run_review(ctx))
+    ctx.llm.chat.reset_mock()
+
+    outcome = await run_review(ctx)
+
+    ctx.llm.chat.assert_not_called()
+    assert outcome.is_empty
+
+
+@pytest.mark.asyncio
+async def test_unsent_review_keeps_tasks_for_next_pass(tmp_path):
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = _empty_llm(), _journal_with_tasks(tmp_path, "задача")
+    await run_review(ctx)  # сводка не ушла — mark_shown не звали
+
+    await run_review(ctx)
+
+    assert "задача" in _prompt(ctx.llm)
+
+
+@pytest.mark.asyncio
+async def test_long_backlog_is_read_in_parts(tmp_path, monkeypatch):
+    import app.learning.review as review
+
+    monkeypatch.setattr(review.settings, "consolidate_max_tasks", 2)
+    ctx = _ctx(tmp_path)
+    ctx.llm, ctx.journal = _empty_llm(), _journal_with_tasks(tmp_path, "раз", "два", "три")
+
+    first = await run_review(ctx)
+    mark_shown(ctx, first)
+    second = await run_review(ctx)
+
+    assert first.reviewed == 2 and first.more
+    assert "запусти /learn снова" in render_review(first)
+    assert not first.is_empty
+    assert "три" in _prompt(ctx.llm) and "два" not in _prompt(ctx.llm)
+    assert second.reviewed == 1 and not second.more
 
 
 # ---------- уроки и запреты: неудачи эпизодов превращаются в правила ----------

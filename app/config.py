@@ -87,9 +87,11 @@ class Settings(BaseSettings):
     # сколько мы согласны платить за него в каждой задаче: дальше растёт база,
     # а не контекст.
     memory_index_token_budget: int = Field(default=800, alias="MEMORY_INDEX_TOKEN_BUDGET")
-    # Окно консолидации: сколько часов журнала обобщать за один проход самопроверки.
-    # По умолчанию — сутки.
+    # Консолидация читает журнал с места прошлого /learn. CONSOLIDATE_HOURS — окно
+    # только для самого первого прохода, когда отметки ещё нет.
     consolidate_hours: int = Field(default=24, alias="CONSOLIDATE_HOURS")
+    # Задач за один проход: больше — промпт раздувается, остаток берёт следующий /learn.
+    consolidate_max_tasks: int = Field(default=30, alias="CONSOLIDATE_MAX_TASKS")
     consolidate_max_items: int = Field(default=5, alias="CONSOLIDATE_MAX_ITEMS")
 
 

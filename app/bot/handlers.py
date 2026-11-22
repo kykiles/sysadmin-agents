@@ -125,6 +125,8 @@ def build_router(*, director, gateway=None, allowed_id: int, memory, learning=No
         outcome = await run_review(learning)
         if outcome.is_empty:
             await message.answer("Нечего предложить: устаревших фактов не нашёл.")
+            # Журнал мог быть прочитан и без находок — отметку всё равно сдвигаем.
+            mark_shown(learning, outcome)
             return
         # Длинная сводка одним сообщением падала на лимите Telegram. Кнопки — на
         # последней части; запас под строки «• Записано: …», которые дописывает нажатие.

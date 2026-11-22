@@ -26,7 +26,23 @@ class LintState(SqliteStore):
         "key TEXT NOT NULL, "
         "ts_reported TEXT NOT NULL, "
         "PRIMARY KEY (scope, key))",
+        # До какой задачи журнала дошла консолидация: следующий /learn берёт задачи
+        # после неё, сколько бы времени ни прошло. Одна строка.
+        "CREATE TABLE IF NOT EXISTS consolidate_mark ("
+        "id INTEGER PRIMARY KEY CHECK (id = 1), "
+        "ts TEXT NOT NULL)",
     )
+
+    def consolidated_until(self) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT ts FROM consolidate_mark WHERE id = 1").fetchone()
+        return row[0] if row else None
+
+    def set_consolidated_until(self, ts: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO consolidate_mark (id, ts) VALUES (1, ?) "
+                "ON CONFLICT(id) DO UPDATE SET ts = excluded.ts", (ts,))
 
     def reported_since(self, since: datetime) -> set[tuple[str, str]]:
         with self._connect() as conn:

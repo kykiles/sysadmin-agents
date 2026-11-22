@@ -1,8 +1,9 @@
 """Консолидация: обобщение прошедших задач в предложения записать факт.
 
 Директор пишет память в момент задачи и неизбежно что-то не записывает — решение
-казалось разовым, а повторилось. Раз в сутки проходим по журналу и предлагаем то,
-чего в памяти нет. Предлагаем, а не пишем: LLM задним числом знает хуже, чем
+казалось разовым, а повторилось. По /learn проходим по журналу с места прошлого
+разбора и предлагаем то, чего в памяти нет. Окно «последние N часов» теряло задачи,
+когда /learn запускали реже (12–21.11.2026 не разобрал никто). Предлагаем, а не пишем: LLM задним числом знает хуже, чем
 Директор в моменте (ровно на этом умер детектор повторов, см. docs/adr/0004), и
 человек должен видеть, что оседает в памяти навсегда.
 
@@ -14,7 +15,7 @@
 """
 import json
 import logging
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from agent_memory.facts import KINDS, KnowledgeStore
 from agent_memory.journal import TaskJournal
@@ -29,7 +30,7 @@ class LLM(Protocol):
 
 
 _PROMPT = (
-    "Ты разбираешь журнал работы админской системы за прошедшие сутки и решаешь, "
+    "Ты разбираешь журнал работы админской системы за период и решаешь, "
     "чего не хватает в её долговременной памяти.\n\n"
     "Что уже в памяти (область/ключ = значение):\n{known}\n\n"
     "Задачи за период (что просили → чем кончилось; строки «не вышло» — что по "
@@ -61,7 +62,7 @@ _PROMPT = (
 
 
 # Хвост каждого отчёта агента и предел на весь проход: итог отчёт пишет в конце, а
-# двадцать транскриптов по 3000 символов — это ещё терпимый один промпт в сутки.
+# двадцать транскриптов по 3000 символов — это ещё терпимый один промпт за проход.
 _REPORT_TAIL = 3000
 _REPORTS_MAX = 60_000
 
@@ -136,12 +137,25 @@ def _parse(content: str, limit: int) -> list[dict]:
     return out
 
 
+class Consolidation(NamedTuple):
+    suggested: list[dict]
+    reviewed: int  # сколько задач прочитано за проход
+    until: str | None  # ts последней прочитанной — следующий проход начнётся после неё
+    more: bool  # в журнале остались задачи за пределом прохода
+
+
 async def propose(llm: LLM, journal: TaskJournal, facts: KnowledgeStore, *,
-                  hours: int, limit: int) -> list[dict]:
-    """Что стоило бы помнить по итогам последних `hours` часов. Ничего не пишет."""
-    tasks = journal.recent_with_summary(hours)
+                  since: str, max_tasks: int, limit: int) -> Consolidation:
+    """Что стоило бы помнить по задачам после `since`. Ничего не пишет.
+
+    За проход — не больше `max_tasks` самых старых: после долгого перерыва весь
+    хвост журнала раздул бы промпт, и модель пропускала бы важное. Остаток заберёт
+    следующий проход."""
+    tasks = journal.since_with_summary(since, max_tasks + 1)
+    more = len(tasks) > max_tasks
+    tasks = tasks[:max_tasks]
     if not tasks:
-        return []
+        return Consolidation([], 0, None, False)
     live = facts.all_live()
     current = {(f["scope"], f["key"]): f["value"] for f in live}
     prompt = _PROMPT.format(known=_render_known(live), tasks=_render_tasks(tasks), limit=limit)
@@ -157,4 +171,4 @@ async def propose(llm: LLM, journal: TaskJournal, facts: KnowledgeStore, *,
         p["replaces"] = replaces
         p["similar"] = facts.similar(p["scope"], p["key"], f"{p['value']} {p['description']}")
         out.append(p)
-    return out
+    return Consolidation(out, len(tasks), tasks[-1]["ts"], more)

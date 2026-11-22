@@ -158,21 +158,22 @@ class TaskJournal(SqliteStore):
             for i, intent, agent, seq, it, ok in rows
         ]
 
-    def recent_with_summary(self, hours: int) -> list[dict]:
-        """Задачи за период в виде «что просили → чем кончилось» плюс эпизод — вход
-        консолидации. Без проблем задач она предлагает только факты об инфраструктуре,
-        а из повторяющейся неудачи получается урок или запрет. Транскрипт — пустой,
-        если задача старше хранимых: из него консолидация берёт отчёты агентов."""
-        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    def since_with_summary(self, since: str, limit: int) -> list[dict]:
+        """Первые `limit` задач после `since`, старые первыми, в виде «что просили →
+        чем кончилось» плюс эпизод — вход консолидации. Без проблем задач она
+        предлагает только факты об инфраструктуре, а из повторяющейся неудачи
+        получается урок или запрет. Транскрипт — пустой, если задача старше
+        хранимых: из него консолидация берёт отчёты агентов."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT t.intent, t.summary, t.outcome, t.problems, tr.body FROM tasks t "
-                "LEFT JOIN transcripts tr ON tr.task_id = t.id WHERE t.ts >= ? ORDER BY t.ts",
-                (since,),
+                "SELECT t.ts, t.intent, t.summary, t.outcome, t.problems, tr.body FROM tasks t "
+                "LEFT JOIN transcripts tr ON tr.task_id = t.id WHERE t.ts > ? "
+                "ORDER BY t.ts LIMIT ?",
+                (since, limit),
             ).fetchall()
-        return [{"intent": intent, "summary": summary or "", "outcome": outcome or "",
+        return [{"ts": ts, "intent": intent, "summary": summary or "", "outcome": outcome or "",
                  "problems": json.loads(problems or "[]"), "transcript": body or ""}
-                for intent, summary, outcome, problems, body in rows]
+                for ts, intent, summary, outcome, problems, body in rows]
 
     def save_transcript(self, task_id: str, body: str, keep: int) -> None:
         """Сохранить ход задачи, оставив в базе только `keep` последних."""
